@@ -11,7 +11,8 @@ struct VaultPayload: Codable, Equatable {
             title: "Untitled",
             body: body,
             createdAt: now,
-            updatedAt: now
+            updatedAt: now,
+            isTitleFinalized: false
         )
 
         return VaultPayload(
@@ -37,4 +38,41 @@ struct VaultNote: Codable, Equatable, Identifiable {
     var body: String
     let createdAt: Date
     var updatedAt: Date
+    var isTitleFinalized: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case body
+        case createdAt
+        case updatedAt
+        case isTitleFinalized
+    }
+
+    init(
+        id: String,
+        title: String,
+        body: String,
+        createdAt: Date,
+        updatedAt: Date,
+        isTitleFinalized: Bool
+    ) {
+        self.id = id
+        self.title = title
+        self.body = body
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.isTitleFinalized = isTitleFinalized
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        body = try container.decode(String.self, forKey: .body)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        isTitleFinalized = try container.decodeIfPresent(Bool.self, forKey: .isTitleFinalized)
+            ?? (title.localizedCaseInsensitiveCompare("Untitled") != .orderedSame)
+    }
 }

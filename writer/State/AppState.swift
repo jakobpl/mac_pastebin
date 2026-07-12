@@ -208,7 +208,11 @@ final class AppState: ObservableObject {
         }
 
         notes[selectedNoteIndex].body = body
-        notes[selectedNoteIndex].title = noteTitle(for: body)
+        if !notes[selectedNoteIndex].isTitleFinalized,
+           let title = titleFromFirstFiveWords(in: body) {
+            notes[selectedNoteIndex].title = title
+            notes[selectedNoteIndex].isTitleFinalized = true
+        }
         notes[selectedNoteIndex].updatedAt = Date()
         editorStatusMessage = nil
         scheduleAutoSave()
@@ -254,7 +258,8 @@ final class AppState: ObservableObject {
             title: "Untitled",
             body: "",
             createdAt: now,
-            updatedAt: now
+            updatedAt: now,
+            isTitleFinalized: false
         )
 
         notes.append(note)
@@ -269,6 +274,7 @@ final class AppState: ObservableObject {
 
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         notes[noteIndex].title = trimmedTitle.isEmpty ? "Untitled" : String(trimmedTitle.prefix(40))
+        notes[noteIndex].isTitleFinalized = true
         notes[noteIndex].updatedAt = Date()
         saveCurrentPayload()
     }
@@ -358,17 +364,13 @@ final class AppState: ObservableObject {
         )
     }
 
-    private func noteTitle(for body: String) -> String {
-        let trimmedTitle = body
-            .split(whereSeparator: \.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first { !$0.isEmpty } ?? ""
-
-        if trimmedTitle.isEmpty {
-            return "Untitled"
+    private func titleFromFirstFiveWords(in body: String) -> String? {
+        let words = body.split { $0.isWhitespace || $0.isNewline }
+        guard words.count >= 5 else {
+            return nil
         }
 
-        return String(trimmedTitle.prefix(40))
+        return String(words.prefix(5).joined(separator: " ").prefix(40))
     }
 
     private func authenticationErrorMessage(for error: Error) -> String {

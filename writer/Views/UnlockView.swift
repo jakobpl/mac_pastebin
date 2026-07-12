@@ -7,25 +7,42 @@ struct UnlockView: View {
     @State private var isConfirmingVaultReplacement = false
     @State private var isConfirmingNewVault = false
     @State private var archivedVaultPendingDeletion: VaultService.ArchivedVault?
+    @FocusState private var isPasswordFocused: Bool
 
     var body: some View {
-        ZStack {
-            Rectangle()
-                .fill(.ultraThinMaterial)
-                .opacity(0.64)
-                .ignoresSafeArea()
+        GeometryReader { geometry in
+            ZStack {
+                ScrollView {
+                    VStack(spacing: 24) {
+                        lockHeroBadge
 
-            ScrollView {
-                VStack(spacing: 16) {
-                    unlockPanel
-                    recoveryPanel
-                    archivedVaultsPanel
+                        passwordField
+                            .padding(.top, 6)
+
+                        if let errorMessage = appState.authenticationErrorMessage {
+                            Text(errorMessage)
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(.red.opacity(0.82))
+                                .multilineTextAlignment(.center)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        recoveryPanel
+                        archivedVaultsPanel
+                    }
+                    .padding(.horizontal, 44)
+                    .padding(.vertical, 40)
+                    .frame(maxWidth: 640)
+                    .liquidGlassSurface(cornerRadius: 24, tintOpacity: 0.24)
+                    .padding(.horizontal, 32)
+                    .padding(.vertical, 58)
+                    .frame(maxWidth: .infinity, minHeight: geometry.size.height)
                 }
-                .padding(.horizontal, 28)
-                .padding(.top, 88)
-                .padding(.bottom, 28)
-                .frame(maxWidth: 620)
+                .scrollIndicators(.hidden)
             }
+        }
+        .onAppear {
+            isPasswordFocused = true
         }
         .onChange(of: appState.canReplaceCorruptedVault) { _, canReplace in
             if !canReplace {
@@ -55,105 +72,132 @@ struct UnlockView: View {
         }
     }
 
-    private var unlockPanel: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "lock.fill")
-                .font(.title2)
-                .foregroundStyle(.white.opacity(0.58))
+    private var lockHeroBadge: some View {
+        ZStack {
+            Circle()
+                .fill(Color.white.opacity(0.18))
 
-            Text("Locked")
-                .font(.title.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.94))
+            Circle()
+                .fill(.clear)
+                .glassEffect(
+                    .regular.tint(WriterPalette.glassTint.opacity(0.30)),
+                    in: Circle()
+                )
 
-            Text(appState.vaultNeedsCreation ? "Create vault" : "Unlock vault")
-                .foregroundStyle(.white.opacity(0.58))
+            Circle()
+                .strokeBorder(Color.white.opacity(0.64), lineWidth: 1)
+                .padding(1)
 
-            SecureField("Password", text: $password)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 300)
-                .onSubmit(submitPassword)
+            Circle()
+                .strokeBorder(Color.white.opacity(0.28), lineWidth: 1)
+                .padding(10)
 
-            if let errorMessage = appState.authenticationErrorMessage {
-                Text(errorMessage)
-                    .foregroundStyle(.red)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Button(appState.vaultNeedsCreation ? "Create" : "Unlock") {
-                submitPassword()
-            }
-            .disabled(password.isEmpty)
-            .buttonStyle(.glassProminent)
+            Image(systemName: appState.vaultNeedsCreation ? "plus.app" : "lock.fill")
+                .font(.system(size: 42, weight: .light))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(WriterPalette.paperInk.opacity(0.48))
+                .shadow(color: .white.opacity(0.65), radius: 2, x: 0, y: -1)
         }
-        .padding(.horizontal, 44)
-        .padding(.vertical, 34)
-        .frame(maxWidth: .infinity)
-        .glassPanel(cornerRadius: 36, material: .regularMaterial, strokeOpacity: 0.34)
+        .frame(width: 112, height: 112)
+        .shadow(color: .white.opacity(0.18), radius: 6, x: 0, y: -2)
+        .shadow(color: .black.opacity(0.18), radius: 14, x: 0, y: 8)
+    }
+
+    private var passwordField: some View {
+        SecureField("Password", text: $password)
+            .textFieldStyle(.plain)
+            .font(.system(size: 20, weight: .regular))
+            .foregroundStyle(WriterPalette.paperInk.opacity(0.70))
+            .tint(WriterPalette.paperInk.opacity(0.70))
+            .frame(height: 28)
+            .writerInputChrome(cornerRadius: 24)
+            .frame(maxWidth: 520)
+            .focusEffectDisabled()
+            .focused($isPasswordFocused)
+            .onSubmit(submitPassword)
+            .accessibilityLabel(appState.vaultNeedsCreation ? "Create vault password" : "Vault password")
     }
 
     @ViewBuilder
     private var recoveryPanel: some View {
-        if appState.canReplaceCorruptedVault || !appState.vaultNeedsCreation {
-            VStack(spacing: 12) {
-                if appState.canReplaceCorruptedVault {
-                    if isConfirmingVaultReplacement {
-                        Text("This moves the current vault aside and starts a new empty vault.")
-                            .foregroundStyle(.white.opacity(0.62))
-                            .multilineTextAlignment(.center)
+        if appState.canReplaceCorruptedVault {
+            VStack(spacing: 14) {
+                if isConfirmingVaultReplacement {
+                    Text("This moves the current vault aside and starts a new empty vault.")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(WriterPalette.paperInk.opacity(0.62))
+                        .multilineTextAlignment(.center)
 
-                        HStack {
-                            Button("Cancel") {
-                                isConfirmingVaultReplacement = false
-                            }
-                            .buttonStyle(.glass)
+                    HStack(spacing: 12) {
+                        recoveryButton(title: "Cancel", systemImage: "xmark") {
+                            isConfirmingVaultReplacement = false
+                        }
 
-                            Button("Replace vault", role: .destructive) {
-                                password = ""
-                                isConfirmingVaultReplacement = false
-                                appState.replaceCorruptedVaultAfterConfirmation()
-                            }
-                            .buttonStyle(.glassProminent)
+                        recoveryButton(title: "Replace vault", systemImage: "arrow.clockwise") {
+                            password = ""
+                            isConfirmingVaultReplacement = false
+                            appState.replaceCorruptedVaultAfterConfirmation()
                         }
-                    } else {
-                        Button("Replace corrupted vault") {
-                            isConfirmingVaultReplacement = true
-                        }
-                        .buttonStyle(.plain)
                     }
-                }
-
-                if !appState.vaultNeedsCreation {
-                    if isConfirmingNewVault {
-                        Text("This moves the current encrypted vault aside. It does not delete or decrypt it.")
-                            .foregroundStyle(.white.opacity(0.62))
-                            .multilineTextAlignment(.center)
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        HStack {
-                            Button("Cancel") {
-                                isConfirmingNewVault = false
-                            }
-                            .buttonStyle(.glass)
-
-                            Button("Start new vault", role: .destructive) {
-                                password = ""
-                                isConfirmingNewVault = false
-                                appState.startNewVaultAfterForgettingPassword()
-                            }
-                            .buttonStyle(.glassProminent)
-                        }
-                    } else {
-                        Button("Forgot password? Start new vault") {
-                            isConfirmingNewVault = true
-                        }
-                        .buttonStyle(.plain)
+                } else {
+                    recoveryButton(title: "Replace corrupted vault", systemImage: "exclamationmark.triangle") {
+                        isConfirmingVaultReplacement = true
                     }
                 }
             }
-            .padding(.top, 2)
-            .frame(maxWidth: .infinity)
+        } else if !appState.vaultNeedsCreation {
+            if isConfirmingNewVault {
+                VStack(spacing: 14) {
+                    Text("This moves the current encrypted vault aside. It does not delete or decrypt it.")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(WriterPalette.paperInk.opacity(0.62))
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    HStack(spacing: 12) {
+                        recoveryButton(title: "Cancel", systemImage: "xmark") {
+                            isConfirmingNewVault = false
+                        }
+
+                        recoveryButton(title: "Start new vault", systemImage: "key.slash") {
+                            password = ""
+                            isConfirmingNewVault = false
+                            appState.startNewVaultAfterForgettingPassword()
+                        }
+                    }
+                }
+                .frame(maxWidth: 620)
+            } else {
+                recoveryButton(title: "Start new vault", systemImage: "key.slash") {
+                    isConfirmingNewVault = true
+                }
+            }
+        } else {
+            Button {
+                submitPassword()
+            } label: {
+                Label("Create vault", systemImage: "plus")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(WriterPalette.paperInk.opacity(password.isEmpty ? 0.36 : 0.78))
+                    .frame(height: 44)
+                    .padding(.horizontal, 22)
+            }
+            .disabled(password.isEmpty)
+            .buttonStyle(.plain)
+            .puffyGlassSurface(cornerRadius: 22, tintOpacity: 0.30)
         }
+    }
+
+    private func recoveryButton(title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(WriterPalette.paperInk.opacity(0.80))
+                .frame(height: 44)
+                .padding(.horizontal, 22)
+        }
+        .buttonStyle(.plain)
+        .puffyGlassSurface(cornerRadius: 22, tintOpacity: 0.30)
     }
 
     @ViewBuilder
@@ -162,17 +206,24 @@ struct UnlockView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Archived Vaults")
                     .font(.headline)
-                    .foregroundStyle(.white.opacity(0.66))
+                    .foregroundStyle(WriterPalette.paperInk.opacity(0.74))
 
                 ForEach(appState.archivedVaults) { archivedVault in
                     HStack(spacing: 10) {
+                        Image(systemName: "archivebox")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(WriterPalette.paperInk.opacity(0.55))
+                            .frame(width: 28, height: 28)
+                            .writerControlChrome(cornerRadius: 8)
+
                         VStack(alignment: .leading, spacing: 2) {
                             Text(archivedVault.fileName)
                                 .lineLimit(1)
+                                .foregroundStyle(WriterPalette.paperInk.opacity(0.82))
 
                             Text(byteCountLabel(archivedVault.byteCount))
                                 .font(.caption)
-                                .foregroundStyle(.white.opacity(0.58))
+                                .foregroundStyle(WriterPalette.paperInk.opacity(0.52))
                         }
 
                         Spacer()
@@ -181,24 +232,29 @@ struct UnlockView: View {
                             password = ""
                             appState.restoreArchivedVault(id: archivedVault.id)
                         }
-                        .buttonStyle(.glass)
+                        .buttonStyle(WriterButtonStyle())
 
                         Button("Delete", role: .destructive) {
                             archivedVaultPendingDeletion = archivedVault
                         }
-                        .buttonStyle(.glass)
+                        .buttonStyle(WriterButtonStyle())
                     }
                     .padding(10)
-                    .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .writerControlChrome(cornerRadius: 12)
                 }
             }
             .padding(16)
-            .frame(maxWidth: .infinity)
-            .glassPanel(cornerRadius: 30, strokeOpacity: 0.28)
+            .frame(maxWidth: 540)
+            .padding(.top, 8)
+            .liquidGlassSurface(cornerRadius: 18, tintOpacity: 0.26)
         }
     }
 
     private func submitPassword() {
+        guard !password.isEmpty else {
+            return
+        }
+
         let submittedPassword = password
         password = ""
         appState.createOrUnlockVault(password: submittedPassword)

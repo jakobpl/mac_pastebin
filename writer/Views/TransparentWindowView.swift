@@ -26,5 +26,14 @@ struct TransparentWindowView: NSViewRepresentable {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.styleMask.insert(.fullSizeContentView)
+
+        if #available(macOS 11.0, *) {
+            window.titlebarSeparatorStyle = .none
+        }
+
+        window.contentView?.wantsLayer = true
+        window.contentView?.layer?.backgroundColor = NSColor.clear.cgColor
+        window.contentView?.superview?.wantsLayer = true
+        window.contentView?.superview?.layer?.backgroundColor = NSColor.clear.cgColor
     }
 }
