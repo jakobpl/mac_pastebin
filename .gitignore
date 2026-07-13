@@ -1,6 +1,7 @@
 .build/
 DerivedData/
 build/
+dist/
 *.dSYM/
 *.ipa
 *.xcarchive/
@@ -16,3 +17,4 @@ PROJECT.md
 LOOP.md
 STATE.md
 SECURITY.md
+Config/Local.xcconfig
