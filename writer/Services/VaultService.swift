@@ -92,9 +92,15 @@ struct VaultService {
         if !vaultDirectoryExists() {
             try fileManager.createDirectory(
                 at: directoryURL,
-                withIntermediateDirectories: true
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
             )
         }
+
+        try fileManager.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: directoryURL.path
+        )
     }
 
     func createVaultIfNeeded() throws {
@@ -229,7 +235,7 @@ struct VaultService {
         )
 
         return try fileURLs
-            .filter { $0.lastPathComponent.hasPrefix("vault.writer.archived.") }
+            .filter { isArchivedVaultFileName($0.lastPathComponent) }
             .map { url in
                 let resourceValues = try url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
                 return ArchivedVault(
@@ -334,7 +340,8 @@ struct VaultService {
     private func keyDerivationMetadata(from vaultMetadata: VaultKeyDerivationMetadata) -> KeyDerivationMetadata? {
         guard let algorithm = KeyDerivationMetadata.Algorithm(rawValue: vaultMetadata.algorithm),
               let salt = Data(base64Encoded: vaultMetadata.salt),
-              vaultMetadata.iterations > 0,
+              (KeyDerivationService.defaultSaltByteCount...KeyDerivationService.maximumSaltByteCount).contains(salt.count),
+              (1...KeyDerivationService.maximumIterationCount).contains(vaultMetadata.iterations),
               vaultMetadata.keyLength == KeyDerivationService.defaultKeyByteCount
         else {
             return nil
@@ -356,6 +363,10 @@ struct VaultService {
     private func writeVaultFile(_ vaultFile: VaultFile, to url: URL) throws {
         let data = try Self.encoder.encode(vaultFile)
         try data.write(to: url, options: .atomic)
+        try fileManager.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: url.path
+        )
     }
 
     private func encodePayload(_ payload: VaultPayload) throws -> Data {
@@ -386,6 +397,11 @@ struct VaultService {
         }
 
         return fileSize.intValue == 0
+    }
+
+    private func isArchivedVaultFileName(_ fileName: String) -> Bool {
+        fileName.hasPrefix("vault.writer.archived.")
+            || fileName.hasPrefix("vault.writer.corrupt.")
     }
 }
 

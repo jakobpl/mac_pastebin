@@ -63,6 +63,7 @@ struct WriterButtonStyle: ButtonStyle {
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
             .frame(minHeight: 30)
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .background(buttonFill(isPressed: configuration.isPressed), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -77,6 +78,30 @@ struct WriterButtonStyle: ButtonStyle {
         }
 
         return Color.white.opacity(isPressed ? 0.20 : 0.11)
+    }
+}
+
+struct PuffyGlassButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    var cornerRadius: CGFloat = 22
+    var tintOpacity: Double = 0.46
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .contentShape(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            )
+            .puffyGlassSurface(
+                cornerRadius: cornerRadius,
+                tintOpacity: tintOpacity
+            )
+            .contentShape(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            )
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .opacity(isEnabled ? (configuration.isPressed ? 0.86 : 1) : 0.55)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 

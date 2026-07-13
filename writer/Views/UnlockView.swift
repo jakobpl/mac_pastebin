@@ -183,8 +183,7 @@ struct UnlockView: View {
                     .padding(.horizontal, 22)
             }
             .disabled(password.isEmpty)
-            .buttonStyle(.plain)
-            .puffyGlassSurface(cornerRadius: 22, tintOpacity: 0.30)
+            .buttonStyle(PuffyGlassButtonStyle(cornerRadius: 22, tintOpacity: 0.30))
         }
     }
 
@@ -196,8 +195,7 @@ struct UnlockView: View {
                 .frame(height: 44)
                 .padding(.horizontal, 22)
         }
-        .buttonStyle(.plain)
-        .puffyGlassSurface(cornerRadius: 22, tintOpacity: 0.30)
+        .buttonStyle(PuffyGlassButtonStyle(cornerRadius: 22, tintOpacity: 0.30))
     }
 
     @ViewBuilder

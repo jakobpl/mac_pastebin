@@ -25,7 +25,10 @@ final class AppState: ObservableObject {
     private let vaultService: VaultService
     private var derivedKey: SymmetricKey?
     private var autoSaveTask: Task<Void, Never>?
+    private var hasUnsavedChanges = false
+    private var copiedPasteboardChangeCount: Int?
     private let autoSaveDelayNanoseconds: UInt64 = 900_000_000
+    private static let clearClipboardOnLock = false
 
     init(vaultService: VaultService? = nil) {
         self.vaultService = vaultService ?? VaultService()
@@ -37,16 +40,21 @@ final class AppState: ObservableObject {
         lockState == .locked
     }
 
-    func unlockPlaceholder() {
-        lockState = .unlocked
-    }
-
     func lock() {
         autoSaveTask?.cancel()
         autoSaveTask = nil
+
+        if lockState == .unlocked, hasUnsavedChanges {
+            saveCurrentPayload()
+        }
+
+        if Self.clearClipboardOnLock {
+            clearSensitivePasteboardIfUnchanged()
+        }
         derivedKey = nil
         notes = []
         selectedNoteID = nil
+        hasUnsavedChanges = false
         editorStatusMessage = nil
         lockState = .locked
     }
@@ -65,6 +73,7 @@ final class AppState: ObservableObject {
 
             derivedKey = unlockResult.key
             loadPayloadIntoMemory(unlockResult.payload)
+            hasUnsavedChanges = false
             editorStatusMessage = nil
             lockState = .unlocked
             refreshVaultStatus()
@@ -164,6 +173,7 @@ final class AppState: ObservableObject {
     func copySelectedNoteBodyToPasteboard() {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(selectedNoteBody, forType: .string)
+        copiedPasteboardChangeCount = NSPasteboard.general.changeCount
         editorStatusMessage = "Copied."
     }
 
@@ -179,6 +189,9 @@ final class AppState: ObservableObject {
     }
 
     private func saveCurrentPayload() {
+        autoSaveTask?.cancel()
+        autoSaveTask = nil
+
         guard let derivedKey else {
             editorStatusMessage = "Save failed."
             return
@@ -188,6 +201,7 @@ final class AppState: ObservableObject {
 
         do {
             try vaultService.savePayload(currentPayload(), using: derivedKey)
+            hasUnsavedChanges = false
             editorStatusMessage = "Saved."
         } catch {
             editorStatusMessage = "Save failed."
@@ -214,17 +228,18 @@ final class AppState: ObservableObject {
             notes[selectedNoteIndex].isTitleFinalized = true
         }
         notes[selectedNoteIndex].updatedAt = Date()
-        editorStatusMessage = nil
-        scheduleAutoSave()
+        markPayloadChanged()
     }
 
     func selectNote(id: String) {
-        guard notes.contains(where: { $0.id == id }) else {
+        guard id != selectedNoteID,
+              notes.contains(where: { $0.id == id })
+        else {
             return
         }
 
         selectedNoteID = id
-        editorStatusMessage = nil
+        markPayloadChanged()
     }
 
     func selectPreviousNote() {
@@ -235,8 +250,12 @@ final class AppState: ObservableObject {
         }
 
         let previousIndex = max(selectedNoteIndex - 1, 0)
+        guard previousIndex != selectedNoteIndex else {
+            return
+        }
+
         selectedNoteID = notes[previousIndex].id
-        editorStatusMessage = nil
+        markPayloadChanged()
     }
 
     func selectNextNote() {
@@ -247,8 +266,12 @@ final class AppState: ObservableObject {
         }
 
         let nextIndex = min(selectedNoteIndex + 1, notes.count - 1)
+        guard nextIndex != selectedNoteIndex else {
+            return
+        }
+
         selectedNoteID = notes[nextIndex].id
-        editorStatusMessage = nil
+        markPayloadChanged()
     }
 
     func createNote() {
@@ -264,7 +287,7 @@ final class AppState: ObservableObject {
 
         notes.append(note)
         selectedNoteID = note.id
-        editorStatusMessage = nil
+        markPayloadChanged()
     }
 
     func renameNote(id: String, title: String) {
@@ -276,6 +299,7 @@ final class AppState: ObservableObject {
         notes[noteIndex].title = trimmedTitle.isEmpty ? "Untitled" : String(trimmedTitle.prefix(40))
         notes[noteIndex].isTitleFinalized = true
         notes[noteIndex].updatedAt = Date()
+        hasUnsavedChanges = true
         saveCurrentPayload()
     }
 
@@ -293,17 +317,22 @@ final class AppState: ObservableObject {
             selectedNoteID = notes[nextIndex].id
         }
 
+        hasUnsavedChanges = true
         saveCurrentPayload()
     }
 
+    private func markPayloadChanged() {
+        hasUnsavedChanges = true
+        editorStatusMessage = "Unsaved."
+        scheduleAutoSave()
+    }
+
     private func scheduleAutoSave() {
-        guard isAutoSaveEnabled else {
+        guard isAutoSaveEnabled, hasUnsavedChanges else {
             return
         }
 
         autoSaveTask?.cancel()
-        editorStatusMessage = "Unsaved"
-
         let delay = autoSaveDelayNanoseconds
         autoSaveTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: delay)
@@ -324,6 +353,18 @@ final class AppState: ObservableObject {
         }
 
         refreshVaultStatus()
+    }
+
+    private func clearSensitivePasteboardIfUnchanged() {
+        guard let copiedPasteboardChangeCount else {
+            return
+        }
+
+        if NSPasteboard.general.changeCount == copiedPasteboardChangeCount {
+            NSPasteboard.general.clearContents()
+        }
+
+        self.copiedPasteboardChangeCount = nil
     }
 
     private func refreshVaultStatus() {

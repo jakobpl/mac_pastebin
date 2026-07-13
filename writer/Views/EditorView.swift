@@ -171,8 +171,7 @@ struct EditorView: View {
             .frame(height: 44)
             .padding(.horizontal, 17)
         }
-        .buttonStyle(.plain)
-        .puffyGlassSurface(cornerRadius: 16, tintOpacity: 0.30)
+        .buttonStyle(PuffyGlassButtonStyle(cornerRadius: 16, tintOpacity: 0.30))
         .help("Toggle auto save")
     }
 
@@ -183,8 +182,7 @@ struct EditorView: View {
                 .foregroundStyle(WriterPalette.paperInk.opacity(0.72))
                 .frame(width: 46, height: 46)
         }
-        .buttonStyle(.plain)
-        .puffyGlassSurface(cornerRadius: 16, tintOpacity: 0.30)
+        .buttonStyle(PuffyGlassButtonStyle(cornerRadius: 16, tintOpacity: 0.30))
         .help(help)
     }
 
@@ -205,8 +203,7 @@ struct EditorView: View {
                         .foregroundStyle(WriterPalette.paperInk.opacity(0.78))
                         .frame(width: 46, height: 46)
                 }
-                .buttonStyle(.plain)
-                .puffyGlassSurface(cornerRadius: 15, tintOpacity: 0.30)
+                .buttonStyle(PuffyGlassButtonStyle(cornerRadius: 15, tintOpacity: 0.30))
                 .help("New note")
             }
 

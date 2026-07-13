@@ -16,6 +16,7 @@ struct KeyDerivationMetadata: Equatable {
 
 struct KeyDerivationService {
     enum KeyDerivationError: Error {
+        case emptyPassword
         case invalidMetadata
         case randomSaltGenerationFailed
         case keyDerivationFailed
@@ -25,8 +26,10 @@ struct KeyDerivationService {
     }
 
     static let defaultSaltByteCount = 16
-    static let defaultIterationCount: UInt32 = 310_000
+    static let defaultIterationCount: UInt32 = 600_000
     static let defaultKeyByteCount = 32
+    static let maximumSaltByteCount = 64
+    static let maximumIterationCount: UInt32 = 2_000_000
 
     func makeMetadata(
         iterations: UInt32 = defaultIterationCount,
@@ -45,22 +48,31 @@ struct KeyDerivationService {
     }
 
     private func deriveKeyData(from password: String, metadata: KeyDerivationMetadata) throws -> Data {
+        guard !password.isEmpty else {
+            throw KeyDerivationError.emptyPassword
+        }
+
         guard metadata.algorithm == .pbkdf2HMACSHA256,
-              metadata.salt.count >= Self.defaultSaltByteCount,
-              metadata.iterations > 0,
+              (Self.defaultSaltByteCount...Self.maximumSaltByteCount).contains(metadata.salt.count),
+              (1...Self.maximumIterationCount).contains(metadata.iterations),
               metadata.keyLength == Self.defaultKeyByteCount
         else {
             throw KeyDerivationError.invalidMetadata
         }
 
+        var passwordData = Data(password.utf8)
+        defer {
+            passwordData.resetBytes(in: passwordData.indices)
+        }
+
         var derivedKey = Data(count: metadata.keyLength)
         let status = derivedKey.withUnsafeMutableBytes { derivedKeyBytes in
             metadata.salt.withUnsafeBytes { saltBytes in
-                password.withCString { passwordBytes in
+                passwordData.withUnsafeBytes { passwordBytes in
                     CCKeyDerivationPBKDF(
                         CCPBKDFAlgorithm(kCCPBKDF2),
-                        passwordBytes,
-                        strlen(passwordBytes),
+                        passwordBytes.bindMemory(to: Int8.self).baseAddress,
+                        passwordData.count,
                         saltBytes.bindMemory(to: UInt8.self).baseAddress,
                         metadata.salt.count,
                         CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256),
