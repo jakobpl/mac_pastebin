@@ -20,4 +20,8 @@ Put your Apple Team ID in `Config/Local.xcconfig`, then open `writer.xcodeproj` 
 
 Prebuilt releases are attached on the [GitHub Releases](https://github.com/jakobpl/writer/releases) page (`Writer-macOS.zip`).
 
-After unzipping, macOS may block the first launch (unsigned / not notarized). Use **Right-click the app → Open**, or allow it under **System Settings → Privacy & Security**.
+After unzipping, macOS may block the first launch (unsigned / not notarized). Newer macOS often shows only **Move to Trash** / **Done** — that is normal.
+
+- Control-click (right-click) **Writer.app** → **Open** → confirm **Open**
+- Or: **System Settings → Privacy & Security** → scroll down → **Open Anyway**
+- Or in Terminal: `xattr -cr /path/to/Writer.app` then open the app again
