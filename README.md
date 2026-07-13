@@ -18,6 +18,6 @@ Put your Apple Team ID in `Config/Local.xcconfig`, then open `writer.xcodeproj` 
 
 ## Download
 
-Prebuilt releases are attached on the [GitHub Releases](https://github.com/jakobpl/swift_encrypted_pastebin/releases) page (`Writer-macOS.zip`).
+Prebuilt releases are attached on the [GitHub Releases](https://github.com/jakobpl/writer/releases) page (`Writer-macOS.zip`).
 
 After unzipping, macOS may block the first launch (unsigned / not notarized). Use **Right-click the app → Open**, or allow it under **System Settings → Privacy & Security**.
