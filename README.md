@@ -1,4 +1,4 @@
-# Writer
+# Mac pastebin
 
 A local encrypted notes app for macOS, written in SwiftUI.
 
