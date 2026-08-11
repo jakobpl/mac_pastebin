@@ -129,7 +129,12 @@ struct VaultService {
             return nil
         }
 
-        let data = try Data(contentsOf: try vaultFileURL)
+        let fileURL = try vaultFileURL
+        _ = try VaultResourcePolicy.validatedFileSize(at: fileURL, fileManager: fileManager)
+        let data = try Data(contentsOf: fileURL, options: .mappedIfSafe)
+        guard data.count <= VaultResourcePolicy.maximumVaultFileBytes else {
+            throw VaultServiceError.invalidVault
+        }
         return try Self.decoder.decode(VaultFile.self, from: data)
     }
 
@@ -147,6 +152,7 @@ struct VaultService {
 
     func createVault(password: String) throws -> VaultUnlockResult {
         try ensureVaultDirectoryExists()
+        try VaultPasswordPolicy.validate(password)
 
         let metadata = try keyDerivationService.makeMetadata(iterations: newVaultIterationCount)
         let key = try keyDerivationService.deriveKey(from: password, metadata: metadata)
@@ -197,6 +203,9 @@ struct VaultService {
 
         let key = try keyDerivationService.deriveKey(from: password, metadata: metadata)
         let decrypted = try cryptoService.decrypt(encryptedPayload, using: key)
+        guard decrypted.count <= VaultResourcePolicy.maximumPlaintextBytes else {
+            throw VaultServiceError.invalidVault
+        }
 
         if decrypted == Self.validationPayloadPlaintext {
             return VaultUnlockResult(key: key, payload: .singleEditorNote(body: ""))
@@ -216,7 +225,9 @@ struct VaultService {
             throw VaultServiceError.invalidVault
         }
 
-        guard let editorText = String(data: decrypted, encoding: .utf8) else {
+        guard decrypted.count <= VaultResourcePolicy.maximumBodyBytesPerNote,
+              let editorText = String(data: decrypted, encoding: .utf8)
+        else {
             throw VaultServiceError.unlockFailed
         }
 
@@ -303,11 +314,18 @@ struct VaultService {
             throw VaultServiceError.missingVault
         }
 
+        guard isValidPayload(payload) else {
+            throw VaultServiceError.invalidVault
+        }
+
         if vaultFile.formatVersion == 1 {
             _ = try archiveCurrentVaultForMigration()
         }
 
         let plaintext = try encodePayload(payload)
+        guard plaintext.count <= VaultResourcePolicy.maximumPlaintextBytes else {
+            throw VaultServiceError.invalidVault
+        }
         let encryptedPayload = try cryptoService.encrypt(plaintext, using: key)
         let updatedVaultFile = VaultFile(
             formatVersion: Self.currentVaultFormatVersion,
@@ -401,6 +419,9 @@ struct VaultService {
 
     private func writeVaultFile(_ vaultFile: VaultFile, to url: URL) throws {
         let data = try Self.encoder.encode(vaultFile)
+        guard data.count <= VaultResourcePolicy.maximumVaultFileBytes else {
+            throw VaultServiceError.invalidVault
+        }
         try data.write(to: url, options: .atomic)
         try fileManager.setAttributes(
             [.posixPermissions: 0o600],
@@ -413,6 +434,10 @@ struct VaultService {
     }
 
     private func decodePayload(_ data: Data, for vaultFile: VaultFile) -> VaultPayload? {
+        guard data.count <= VaultResourcePolicy.maximumPlaintextBytes else {
+            return nil
+        }
+
         if vaultFile.payloadEncoding == VaultPayloadEncoding.binaryPropertyList {
             return try? Self.propertyListDecoder.decode(VaultPayload.self, from: data)
         }
@@ -421,37 +446,60 @@ struct VaultService {
     }
 
     private func isValidPayload(_ payload: VaultPayload) -> Bool {
+        guard VaultResourcePolicy.isStructurallyValid(payload) else {
+            return false
+        }
+
+        var imagePixelsTotal = 0
         for note in payload.notes {
             guard let richContent = note.richContent else {
                 continue
             }
 
-            guard richContent.imageDisplayWidths.values.allSatisfy({ $0.isFinite && (0.10...1).contains($0) }),
-                  let attributedString = NSAttributedString(
-                    rtfd: richContent.rtfdData,
-                    documentAttributes: nil
-                  )
+            guard richContent.imageDisplayWidths.values.allSatisfy({ $0.isFinite && (0.10...1).contains($0) })
             else {
                 return false
             }
 
-            var isValid = true
             guard Set(richContent.imageAttachmentIDs).count == richContent.imageAttachmentIDs.count else {
                 return false
             }
 
             let sourceIDs = richContent.imageSources.map(\.id)
             guard sourceIDs.count == richContent.imageAttachmentIDs.count,
-                  Set(sourceIDs) == Set(richContent.imageAttachmentIDs),
-                  richContent.imageSources.allSatisfy({
-                      !$0.filenameExtension.isEmpty
-                          && !$0.typeIdentifier.isEmpty
-                          && NSImage(data: $0.data) != nil
-                  })
+                  Set(sourceIDs) == Set(richContent.imageAttachmentIDs)
             else {
                 return false
             }
 
+            var imagePixelsForNote = 0
+            for source in richContent.imageSources {
+                guard !source.filenameExtension.isEmpty,
+                      !source.typeIdentifier.isEmpty,
+                      let metadata = try? VaultResourcePolicy.imageMetadata(for: source.data)
+                else {
+                    return false
+                }
+                imagePixelsForNote += metadata.width * metadata.height
+                imagePixelsTotal += metadata.width * metadata.height
+                guard imagePixelsForNote <= VaultResourcePolicy.maximumImagePixelsPerNote,
+                      imagePixelsTotal <= VaultResourcePolicy.maximumImagePixelsTotal
+                else {
+                    return false
+                }
+            }
+
+            guard VaultResourcePolicy.isValidRTFD(
+                richContent.rtfdData,
+                expectedImageSources: richContent.imageSources
+            ), let attributedString = NSAttributedString(
+                rtfd: richContent.rtfdData,
+                documentAttributes: nil
+            ) else {
+                return false
+            }
+
+            var isValid = true
             var attachmentCount = 0
             let range = NSRange(location: 0, length: attributedString.length)
             attributedString.enumerateAttribute(.attachment, in: range) { value, _, stop in

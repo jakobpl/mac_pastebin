@@ -14,6 +14,44 @@ struct KeyDerivationMetadata: Equatable {
     let keyLength: Int
 }
 
+enum VaultPasswordPolicy {
+    static let minimumCharacterCount = 12
+    static let requirementText = "Use at least 12 characters. A long, unique passphrase works best."
+
+    enum ValidationError: Error, Equatable {
+        case tooShort
+        case commonlyGuessed
+    }
+
+    static func validate(_ password: String) throws {
+        guard password.count >= minimumCharacterCount else {
+            throw ValidationError.tooShort
+        }
+
+        let normalized = password
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let commonlyGuessedPasswords: Set<String> = [
+            "123456789012",
+            "correcthorsebatterystaple",
+            "letmeinletmein",
+            "password1234",
+            "passwordpassword",
+            "qwertyqwerty",
+            "writerwriter"
+        ]
+        guard !commonlyGuessedPasswords.contains(normalized),
+              Set(normalized).count > 1
+        else {
+            throw ValidationError.commonlyGuessed
+        }
+    }
+
+    static func isAcceptable(_ password: String) -> Bool {
+        (try? validate(password)) != nil
+    }
+}
+
 struct KeyDerivationService {
     enum KeyDerivationError: Error {
         case emptyPassword

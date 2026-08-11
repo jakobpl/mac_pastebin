@@ -62,9 +62,21 @@ struct VaultEncryptedPayload: Codable, Equatable {
     }
 
     func encryptedPayload() -> EncryptedPayload? {
-        guard let nonceData = Data(base64Encoded: nonce),
+        guard nonce.utf8.count <= VaultResourcePolicy.maximumBase64CharacterCount(forDecodedByteCount: 12),
+              authenticationTag.utf8.count <= VaultResourcePolicy.maximumBase64CharacterCount(forDecodedByteCount: 16),
+              ciphertext.utf8.count <= VaultResourcePolicy.maximumBase64CharacterCount(
+                  forDecodedByteCount: VaultResourcePolicy.maximumCiphertextBytes
+              ),
+              let nonceData = Data(base64Encoded: nonce),
               let ciphertextData = Data(base64Encoded: ciphertext),
               let authenticationTagData = Data(base64Encoded: authenticationTag)
+        else {
+            return nil
+        }
+
+        guard nonceData.count == 12,
+              authenticationTagData.count == 16,
+              ciphertextData.count <= VaultResourcePolicy.maximumCiphertextBytes
         else {
             return nil
         }

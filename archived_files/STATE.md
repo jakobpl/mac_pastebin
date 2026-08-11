@@ -1,0 +1,221 @@
+# Archived: Project State
+
+> Archived on 2026-08-11. This hand-maintained phase log ends before the current rich-text, attachment, vault-migration, password-policy, and resource-limit work. Git history and the current documentation now provide the active project record.
+
+## Current Phase
+
+Phase 4 — Liquid Glass UI Design Phase
+
+## Completed
+
+- Planning files created.
+- Phase 0 app shell created:
+  - SwiftUI app entry point
+  - locked/unlocked app state
+  - unlock screen placeholder
+  - editor screen placeholder
+  - manual lock button placeholder
+  - basic App/State/Views folder organization
+- Phase 1A auto-lock behavior added:
+  - observes AppKit app/window focus notifications
+  - locks the app when it resigns active or its window resigns key
+  - keeps the existing manual lock path unchanged
+- Phase 1B basic local vault structure added:
+  - VaultService owns Application Support vault paths
+  - app-specific Writer folder is created when needed
+  - empty vault.writer placeholder file is created when needed
+  - placeholder load path checks for the file without storing note contents
+- Phase 1C CryptoService added:
+  - uses CryptoKit AES.GCM
+  - encrypts and decrypts Data with a 256-bit SymmetricKey
+  - returns an envelope with nonce, ciphertext, and authentication tag
+  - debug-only self-check verifies round-trip success and tamper rejection
+- Phase 1D KeyDerivationService added:
+  - derives 256-bit SymmetricKey values from passwords
+  - uses PBKDF2-HMAC-SHA256 through CommonCrypto
+  - generates random 16-byte salts with system randomness
+  - keeps KDF metadata explicit: algorithm, salt, iterations, key length
+  - debug-only self-check verifies deterministic derivation, salt separation, correct decrypt, and wrong-password rejection
+- Phase 1E structured vault file format added:
+  - VaultFile Codable model stores format version, creation date, KDF metadata, encryption metadata, and encrypted payload placeholder
+  - salt and encrypted payload fields are represented as Base64 strings in JSON
+  - VaultService creates and loads JSON vault files in Application Support
+  - existing empty placeholder vault files are replaced with structured JSON
+  - debug-only validation checks creation, decoding, required metadata, and forbidden plaintext markers
+- Phase 1F password-based create/unlock flow added:
+  - locked screen uses SecureField for password input
+  - create mode derives an in-memory key and writes only an encrypted validation payload
+  - unlock mode derives an in-memory key from stored KDF metadata and verifies the encrypted validation payload
+  - wrong passwords fail unlock
+  - password field clears after attempts
+  - manual lock and auto-lock clear the in-memory derived key
+- Phase 1G in-memory editor buffer added:
+  - unlocked editor uses a plain TextEditor
+  - editor text remains available while unlocked
+  - manual lock and auto-lock clear the editor buffer
+  - re-unlocking starts with an empty editor buffer
+- Phase 1H explicit encrypted save added:
+  - editor has a manual Save button
+  - Save encrypts the current editor buffer with AES-256-GCM using the in-memory derived key
+  - encrypted editor payload replaces the vault encrypted payload
+  - unlocking decrypts saved editor text back into memory
+  - manual lock and auto-lock still clear plaintext from memory
+- Phase 1I basic corrupted-vault unlock handling added:
+  - existing but unreadable vault files stay in unlock mode instead of being treated as new vaults
+  - unsupported format/encryption metadata is rejected before deriving or decrypting
+  - invalid KDF metadata is rejected with a specific safe error
+  - locked screen shows safe errors for missing, corrupted, unsupported, or integrity/password failures
+- Phase 1J confirmed corrupted-vault replacement added:
+  - corrupted vault recovery appears only after a vault-structure unlock failure
+  - replacing a corrupted vault requires an explicit confirmation click
+  - the old vault file is moved aside to a timestamped `.corrupt` file instead of being deleted
+  - after replacement, the app returns to create-vault mode
+- Phase 1K editor shortcut and monospace style added:
+  - Save button now responds to Command-S while unlocked
+  - editor uses a simple monospaced visual style inspired by paste.sh
+  - no theme system or extra UI features added
+- Phase 2A encrypted multi-note payload model added:
+  - added an inner VaultPayload model for encrypted note records
+  - each note has an id, title, body, creation date, and update date
+  - create and save now encrypt the structured payload instead of raw editor text
+  - unlock can still read older raw-text encrypted payloads for compatibility
+- Phase 2B minimal multiple-note editor added:
+  - unlocked app state now holds an in-memory note list and selected note id
+  - editor shows a minimal note list beside the text editor
+  - New creates an empty note and selects it
+  - selecting a note switches the editor body
+  - Save encrypts the full note payload into the vault
+  - lock and auto-lock clear all decrypted notes from memory
+- Phase 2C sidebar note actions added:
+  - note rows expose Rename and Delete from a context menu
+  - Rename updates the note title in unlocked memory
+  - Delete requires confirmation before removing the note from unlocked memory
+  - deleting the last note creates a new empty note so the editor stays usable
+  - Save encrypts note rename/delete changes into the vault
+- Phase 2D auto-lock internal UI fix added:
+  - window key-loss events only lock when the app itself is no longer active
+  - app-internal context menus and sheets no longer immediately lock the vault
+  - app inactive notifications still lock the vault when switching away
+- Phase 2E autosave toggle added:
+  - editor header includes an Auto Save toggle
+  - when Auto Save is on, typing schedules a debounced encrypted save
+  - rename and delete persist immediately through the encrypted save path
+  - save status shows Saving... and Saved.
+  - manual Save and Command-S still work
+- Phase 2F keyboard navigation added:
+  - autosave status now shows Unsaved during the debounce window
+  - Saving... only appears when an encrypted write starts
+  - Command-Option-Left focuses the notes list
+  - Command-Option-Right focuses the editor
+  - Up and Down move between notes while the notes list is focused
+- Phase 2G sidebar new-note control added:
+  - note creation now has a small plus icon in the notes sidebar header
+  - the plus icon creates and selects a new empty note
+  - the previous top-level New button was removed so note creation lives with the note list
+  - Touch ID unlock was intentionally deferred until the vault-key storage model can be designed safely
+- Phase 2H new-vault recovery added:
+  - locked screen shows a "Forgot password? Start new vault" option when a vault exists
+  - starting a new vault requires confirmation
+  - the existing encrypted vault is moved aside to a timestamped `.archived` file instead of being deleted
+  - after archiving, the app returns to create-vault mode
+  - the app still supports one active vault file at a time
+- Phase 2I archived vault restore added:
+  - locked screen lists preserved `.archived` vault files
+  - archived vault entries show file name and size only, without decrypting contents
+  - Restore moves the current active vault aside as a new archive
+  - Restore moves the selected archived vault back to `vault.writer`
+  - after restoring, the user unlocks with that vault's password
+- Phase 2J archived vault delete added:
+  - archived vault entries now include a Delete action
+  - Delete requires a confirmation alert that names the archived vault file
+  - deleting removes only selected `vault.writer.archived.*` files
+  - active `vault.writer` and `.corrupt` files are not deleted by this flow
+- Phase 2K copy selected note text added:
+  - editor toolbar includes a copy icon button
+  - copy action writes the currently selected note body to the macOS pasteboard
+  - copy action does not save or modify the vault file
+  - editor status shows Copied. after copying
+- Phase 3A Liquid Glass UI shell added:
+  - added a shared glass panel style for floating control surfaces
+  - editor now uses a floating glass toolbar
+  - editor note navigation now sits in a glass sidebar
+  - primary editor text area remains a clear content surface for legibility
+  - locked screen uses glass panels for unlock, recovery, and archived vault controls
+  - toolbar buttons use native SwiftUI glass button styles
+- Phase 3A refinement added:
+  - window background is now transparent so the macOS desktop/wallpaper provides the color
+  - removed app-drawn grey backgrounds from locked and unlocked screens
+  - glass panels now use lighter material, brighter strokes, and subtle highlights
+  - added a small transparent scrim only for text legibility
+- Phase 3A contrast refinement added:
+  - glass panels now include a controlled dark blue-black tint so bright wallpapers do not overpower content
+  - editor shell and locked screen use darker translucent backdrops for better readability
+  - editor writing surface is darker than the surrounding shell to create clearer hierarchy
+  - toolbar/sidebar/control surfaces have softer highlights and less flat grey styling
+  - window content now extends into the titlebar area to reduce the heavy stock titlebar look
+- Phase 3A native-material cleanup added:
+  - removed custom glass tint, gradient overlays, and panel shadows from the shared glass style
+  - removed the extra unlocked outer glass container so toolbar, sidebar, and editor are no longer nested in another panel
+  - locked and unlocked screens now use clear app backgrounds with material panels providing the blur
+  - editor surface was lightened from a custom dark overlay to native regular material
+  - title text is hidden in the transparent titlebar configuration
+- Phase 3A layout cleanup added:
+  - removed the glass background from the locked-screen forgot-password control
+  - removed the top toolbar capsule and "Notes" title from the unlocked editor
+  - kept editor controls as a compact top-right control strip
+  - added one subtle app-level material backdrop so the app is not completely transparent
+  - moved the editor away from the monospace style and back to the system font
+- Phase 3A parent-container cleanup added:
+  - removed the rounded parent app backdrop from the unlocked editor
+  - replaced it with a flat full-window ultra-thin material layer for subtle background blur
+  - left the vault sidebar, editor field, and top controls as the only visible shaped surfaces
+- Phase 3A locked-background parity added:
+  - locked screen now uses the same flat full-window ultra-thin material layer as the unlocked editor
+  - lock card remains the only shaped locked-screen panel
+  - desktop wallpaper still shows through with subtle app-level blur
+- Phase 3A liquid-glass redesign iteration added:
+  - shared styling now includes material-backed liquid glass surfaces, inner highlights, and softer shadows
+  - editor toolbar, notes sidebar, lock card, and archived vault panel now use the same liquid glass treatment
+  - editor keeps a warm high-contrast writing surface for readability
+  - sidebar keyboard focus no longer paints the large system blue focus ring over the note list
+  - selected note rows use a softer glass highlight
+- Phase 3A inline title editing added:
+  - clicking the editor title switches it into an inline text field
+  - submitting or leaving the field renames the selected note through the existing encrypted rename/save path
+  - the context-menu rename path remains available
+- Phase 3A minimal native-glass iteration added:
+  - custom glass surfaces now use SwiftUI's native macOS 26 `glassEffect(_:in:)`
+  - editor toolbar was split into smaller floating brand and control islands instead of one full-width slab
+  - internal control chips use simpler translucent fills to avoid foggy glass-inside-glass contrast loss
+  - large glass surfaces use lighter tint values for a more transparent/minimal feel
+  - `LIQUID_GLASS.md` now records practical notes from this implementation pass
+- Phase 3A glass-minimal polish iteration added:
+  - added a restrained shared blue/green backdrop so glass surfaces have stable contrast without becoming opaque slabs
+  - lightened glass tints, brightened hairlines, and reduced nested dark fills in the lock card and notes sidebar
+  - replaced the default password field chrome with a custom plain text-field surface to avoid the oversized blue focus halo
+  - separated the lock badge symbol from its glass circle so the icon remains readable
+  - verified the locked and editor states with fresh SwiftUI snapshot renders
+- Phase 4 reference-driven UI pass added:
+  - established `desired_ui_inspiration__locked.png` and `desired_inrpiration_unlocked.png` as the visual north star
+  - locked screen now uses a large frosted pane with centered lock badge, password pill, start-new-vault pill, and subtle sparkle
+  - unlocked editor now uses puffy floating control pills, a tall frosted notes pane, and a warm paper writing surface inside a glass frame
+  - removed the unlocked brand island so the editor composition matches the minimal reference direction
+  - kept click-to-edit title behavior, context-menu rename, copy, save, autosave, manual lock, and vault recovery flows
+  - updated `LOOP.md`, `PROJECT.md`, `SECURITY.md`, and `LIQUID_GLASS.md` for the UI design phase
+
+## Current Goal
+
+Iterate the Liquid Glass UI against the two root reference images while preserving encrypted vault behavior, desktop transparency, and the simple writing flow.
+
+## Next Step
+
+Review a fresh live desktop screenshot when GUI automation allows macOS capture, then tune final material strength against the actual wallpaper instead of only offscreen snapshots.
+
+## Do Not Build Yet
+
+- Search
+- Export
+- Markdown
+- Settings
+- Touch ID unlock
+- Cloud sync

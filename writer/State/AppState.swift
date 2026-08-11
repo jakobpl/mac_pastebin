@@ -19,6 +19,7 @@ final class AppState: ObservableObject {
     @Published private(set) var notes: [VaultNote] = []
     @Published private(set) var selectedNoteID: String?
     @Published private(set) var isAutoSaveEnabled = false
+    @Published private(set) var credentialResetGeneration: UInt64 = 0
     @Published var authenticationErrorMessage: String?
     @Published var editorStatusMessage: String?
 
@@ -41,6 +42,7 @@ final class AppState: ObservableObject {
     }
 
     func lock() {
+        credentialResetGeneration &+= 1
         autoSaveTask?.cancel()
         autoSaveTask = nil
 

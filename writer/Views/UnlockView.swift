@@ -4,6 +4,7 @@ import SwiftUI
 struct UnlockView: View {
     @EnvironmentObject private var appState: AppState
     @State private var password = ""
+    @State private var passwordConfirmation = ""
     @State private var isConfirmingVaultReplacement = false
     @State private var isConfirmingNewVault = false
     @State private var archivedVaultPendingDeletion: VaultService.ArchivedVault?
@@ -50,9 +51,15 @@ struct UnlockView: View {
             }
         }
         .onChange(of: appState.vaultNeedsCreation) { _, needsCreation in
-            if needsCreation {
-                isConfirmingNewVault = false
-            }
+            password = ""
+            passwordConfirmation = ""
+            isConfirmingNewVault = false
+        }
+        .onChange(of: appState.credentialResetGeneration) { _, _ in
+            password = ""
+            passwordConfirmation = ""
+            isConfirmingVaultReplacement = false
+            isConfirmingNewVault = false
         }
         .alert(
             "Delete Archived Vault?",
@@ -104,16 +111,37 @@ struct UnlockView: View {
     }
 
     private var passwordField: some View {
-        WriterSecurePasswordField(
-            text: $password,
-            placeholder: "Password",
-            accessibilityLabel: appState.vaultNeedsCreation ? "Create vault password" : "Vault password",
-            requestsInitialFocus: shouldFocusPassword,
-            onSubmit: submitPassword
-        )
+        VStack(spacing: 12) {
+            WriterSecurePasswordField(
+                text: $password,
+                placeholder: "Password",
+                accessibilityLabel: appState.vaultNeedsCreation ? "Create vault password" : "Vault password",
+                requestsInitialFocus: shouldFocusPassword,
+                resetGeneration: appState.credentialResetGeneration,
+                onSubmit: submitPassword
+            )
             .frame(height: 48)
             .writerInputChrome(cornerRadius: 24)
-            .frame(maxWidth: 520)
+
+            if appState.vaultNeedsCreation {
+                WriterSecurePasswordField(
+                    text: $passwordConfirmation,
+                    placeholder: "Confirm password",
+                    accessibilityLabel: "Confirm vault password",
+                    requestsInitialFocus: false,
+                    resetGeneration: appState.credentialResetGeneration,
+                    onSubmit: submitPassword
+                )
+                .frame(height: 48)
+                .writerInputChrome(cornerRadius: 24)
+
+                Text(passwordGuidance)
+                    .font(.caption)
+                    .foregroundStyle(passwordGuidanceIsError ? .red.opacity(0.82) : WriterPalette.paperInk.opacity(0.55))
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .frame(maxWidth: 520)
     }
 
     @ViewBuilder
@@ -176,11 +204,11 @@ struct UnlockView: View {
             } label: {
                 Label("Create vault", systemImage: "plus")
                     .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(WriterPalette.paperInk.opacity(password.isEmpty ? 0.36 : 0.78))
+                    .foregroundStyle(WriterPalette.paperInk.opacity(canSubmitPassword ? 0.78 : 0.36))
                     .frame(height: 44)
                     .padding(.horizontal, 22)
             }
-            .disabled(password.isEmpty)
+            .disabled(!canSubmitPassword)
             .buttonStyle(PuffyGlassButtonStyle(cornerRadius: 22, tintOpacity: 0.30))
         }
     }
@@ -247,13 +275,42 @@ struct UnlockView: View {
     }
 
     private func submitPassword() {
-        guard !password.isEmpty else {
+        guard canSubmitPassword else {
             return
         }
 
         let submittedPassword = password
         password = ""
+        passwordConfirmation = ""
         appState.createOrUnlockVault(password: submittedPassword)
+    }
+
+    private var canSubmitPassword: Bool {
+        guard !password.isEmpty else {
+            return false
+        }
+        guard appState.vaultNeedsCreation else {
+            return true
+        }
+        return VaultPasswordPolicy.isAcceptable(password) && password == passwordConfirmation
+    }
+
+    private var passwordGuidance: String {
+        guard !password.isEmpty else {
+            return VaultPasswordPolicy.requirementText
+        }
+        guard VaultPasswordPolicy.isAcceptable(password) else {
+            return VaultPasswordPolicy.requirementText
+        }
+        guard passwordConfirmation.isEmpty || password == passwordConfirmation else {
+            return "Passwords do not match."
+        }
+        return passwordConfirmation.isEmpty ? "Enter the same password again." : "Passwords match."
+    }
+
+    private var passwordGuidanceIsError: Bool {
+        (!password.isEmpty && !VaultPasswordPolicy.isAcceptable(password))
+            || (!passwordConfirmation.isEmpty && password != passwordConfirmation)
     }
 
     private func byteCountLabel(_ byteCount: Int64) -> String {

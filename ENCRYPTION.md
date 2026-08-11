@@ -20,6 +20,7 @@ The outer vault header is not encrypted. It reveals the format version, payload 
 
 ## Passwords and recovery
 
+- New vaults require a password of at least 12 characters and matching confirmation. Writer rejects a small set of known-trivial values. Existing vaults remain unlockable with their original password so the policy does not strand older data.
 - Prefer a unique, randomly generated password or a long passphrase stored in a reputable password manager.
 - Losing the password means losing access. Writer has no recovery key, escrow service, reset flow, or back door.
 - Changing a password requires decrypting the vault with the old password and re-encrypting it with a new salt and key. Writer does not currently expose that operation.
@@ -36,6 +37,18 @@ The outer vault header is not encrypted. It reveals the format version, payload 
 - Archived vaults are still encrypted, but they remain sensitive: weak or reused passwords can be attacked offline indefinitely.
 - Do not reuse an AES-GCM nonce with the same key. Writer delegates nonce generation to CryptoKit and creates a new sealed box on every save.
 - Any future vault-format change should use a new format version, preserve authenticated decryption, strictly bound attacker-controlled KDF parameters, and include a tested migration and rollback path.
+
+## Resource limits
+
+Writer applies one resource policy before reading, decoding, decrypting, parsing, importing, or saving vault content. The current limits are:
+
+- 80 MiB encoded vault file and 48 MiB ciphertext/plaintext
+- 500 notes, 2 MiB of body text per note, and 8 MiB of body text across the vault
+- 16 MiB of RTFD per note and 32 MiB across the vault
+- 64 images per note and 256 across the vault, with 8 MiB per image and 24 MiB of source-image bytes across the vault
+- still images only, at most 8,192 pixels on either axis, 40 megapixels per image, 80 megapixels per note, 160 megapixels per vault, and a 100:1 maximum aspect ratio
+
+RTFD packages are inspected before AppKit parsing, and embedded attachment bytes must match their separately authenticated, ImageIO-preflighted image sources. These limits intentionally trade unusually large documents for bounded unlock, rendering, and recovery behavior.
 
 ## Current limitations
 

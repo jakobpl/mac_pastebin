@@ -1,12 +1,12 @@
-see the following documentation for working with apples liquid glass:
+# Liquid Glass implementation notes
 
-https://developer.apple.com/documentation/technologyoverviews/adopting-liquid-glass
+Writer targets macOS 26 and uses native SwiftUI Liquid Glass APIs. Start with Apple's documentation:
 
-https://developer.apple.com/documentation/swiftui/applying-liquid-glass-to-custom-views
+- [Adopting Liquid Glass](https://developer.apple.com/documentation/technologyoverviews/adopting-liquid-glass)
+- [Applying Liquid Glass to custom views](https://developer.apple.com/documentation/swiftui/applying-liquid-glass-to-custom-views)
+- [Build a SwiftUI app with the new design](https://developer.apple.com/videos/play/wwdc2025/323/)
 
-https://developer.apple.com/videos/play/wwdc2025/323/
-
-## Notes From The Writer UI Iteration
+## Notes from Writer's UI iteration
 
 - Use native SwiftUI `glassEffect(_:in:)` for custom glass surfaces when targeting macOS 26+.
 - Prefer applying glass to a small number of meaningful containers: tool islands, sidebars, lock cards, and key controls.
@@ -20,7 +20,7 @@ https://developer.apple.com/videos/play/wwdc2025/323/
 - Keep glyphs above glass layers. Applying `glassEffect` directly to an icon view can make the symbol disappear or lose contrast in snapshots; use a glass shape as the background and place the SF Symbol in a separate foreground layer.
 - Custom password/title fields should use `.plain` text field styling plus app chrome. Default rounded text fields bring a strong macOS focus ring that clashes with the Liquid Glass surface.
 
-## Current Reference Direction
+## Current reference direction
 
 - Use the root images `desired_ui_inspiration__locked.png` and `desired_inrpiration_unlocked.png` as the design target.
 - Locked state works best as one large frosted window pane with very few controls: centered lock badge, password pill, and start-new-vault pill.

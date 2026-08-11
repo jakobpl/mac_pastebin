@@ -656,9 +656,17 @@ struct RichTextEditor: NSViewRepresentable {
             }
 
             do {
+                _ = try VaultResourcePolicy.validatedImageFileSize(at: url)
                 let data = try Data(contentsOf: url, options: .mappedIfSafe)
-                guard let image = NSImage(data: data), image.size.width > 0, image.size.height > 0 else {
-                    parent.onError("That file is not a supported image.")
+                let imageMetadata = try VaultResourcePolicy.imageMetadata(for: data)
+                guard data.count <= VaultResourcePolicy.maximumImageBytes,
+                      VaultResourcePolicy.canAddImage(
+                          byteCount: data.count,
+                          metadata: imageMetadata,
+                          to: currentAttachmentIDs().compactMap { imageSourcesByID[$0] }
+                      )
+                else {
+                    parent.onError("That image would exceed this note's attachment limit.")
                     return
                 }
 
@@ -677,7 +685,7 @@ struct RichTextEditor: NSViewRepresentable {
 
                 let widthFraction = 0.50
                 imageDisplayWidths[attachmentID] = widthFraction
-                setBounds(for: attachment, imageSize: image.size, widthFraction: widthFraction)
+                setBounds(for: attachment, imageSize: imageMetadata.size, widthFraction: widthFraction)
 
                 performMutation(actionName: "Insert Image") {
                     let replacement = NSAttributedString(attachment: attachment)
@@ -685,8 +693,10 @@ struct RichTextEditor: NSViewRepresentable {
                     textView.textStorage?.replaceCharacters(in: selection, with: replacement)
                     textView.setSelectedRange(NSRange(location: selection.location + 1, length: 0))
                 }
+            } catch VaultResourcePolicy.ValidationError.resourceLimitExceeded {
+                parent.onError("That image is too large or complex to insert safely.")
             } catch {
-                parent.onError("The image could not be read.")
+                parent.onError("The image could not be read or is not a supported still image.")
             }
         }
 
@@ -907,13 +917,24 @@ struct RichTextEditor: NSViewRepresentable {
             }
 
             let plainText = storage.string.replacingOccurrences(of: "\u{FFFC}", with: "")
+            let attachmentIDs = currentAttachmentIDs()
+            let imageSources = attachmentIDs.compactMap { imageSourcesByID[$0] }
+            guard VaultResourcePolicy.canPersistRichContent(
+                body: plainText,
+                rtfdByteCount: rtfdData.count,
+                attachmentCount: attachmentIDs.count,
+                imageSources: imageSources
+            ) else {
+                parent.onError("This note is too large to save safely.")
+                return
+            }
             parent.onChange(
                 plainText,
                 VaultRichContent(
                     rtfdData: rtfdData,
-                    imageAttachmentIDs: currentAttachmentIDs(),
+                    imageAttachmentIDs: attachmentIDs,
                     imageDisplayWidths: persistedImageDisplayWidths(),
-                    imageSources: currentAttachmentIDs().compactMap { imageSourcesByID[$0] }
+                    imageSources: imageSources
                 )
             )
         }
@@ -1199,13 +1220,11 @@ struct RichTextEditor: NSViewRepresentable {
 
         private func imageSize(for attachment: NSTextAttachment) -> NSSize? {
             guard let data = attachment.fileWrapper?.regularFileContents ?? attachment.contents,
-                  let image = NSImage(data: data),
-                  image.size.width > 0,
-                  image.size.height > 0
+                  let metadata = try? VaultResourcePolicy.imageMetadata(for: data)
             else {
                 return nil
             }
-            return image.size
+            return metadata.size
         }
 
         private func setBounds(for attachment: NSTextAttachment, imageSize: NSSize, widthFraction: Double) {

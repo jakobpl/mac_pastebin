@@ -8,6 +8,7 @@ struct WriterSecurePasswordField: NSViewRepresentable {
     let placeholder: String
     let accessibilityLabel: String
     let requestsInitialFocus: Bool
+    let resetGeneration: UInt64
     let onSubmit: () -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -29,6 +30,10 @@ struct WriterSecurePasswordField: NSViewRepresentable {
         context.coordinator.parent = self
 
         let field = container.textField
+        if context.coordinator.consumeResetGeneration(resetGeneration) {
+            field.abortEditing()
+            field.stringValue = ""
+        }
         if field.stringValue != text {
             field.stringValue = text
         }
@@ -39,9 +44,19 @@ struct WriterSecurePasswordField: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: WriterSecurePasswordField
+        private var lastResetGeneration: UInt64
 
         init(parent: WriterSecurePasswordField) {
             self.parent = parent
+            lastResetGeneration = parent.resetGeneration
+        }
+
+        func consumeResetGeneration(_ generation: UInt64) -> Bool {
+            guard generation != lastResetGeneration else {
+                return false
+            }
+            lastResetGeneration = generation
+            return true
         }
 
         func controlTextDidChange(_ notification: Notification) {

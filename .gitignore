@@ -13,8 +13,4 @@ xcuserdata/
 .swiftpm/
 Packages/
 .DS_Store
-PROJECT.md
-LOOP.md
-STATE.md
-SECURITY.md
 Config/Local.xcconfig
