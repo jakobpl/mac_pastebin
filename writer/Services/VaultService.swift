@@ -1,3 +1,4 @@
+import AppKit
 import CryptoKit
 import Foundation
 
@@ -26,6 +27,10 @@ struct VaultService {
     private let fileManager: FileManager
     private let keyDerivationService: KeyDerivationService
     private let cryptoService: CryptoService
+    private let applicationSupportDirectoryOverride: URL?
+    private let newVaultIterationCount: UInt32
+    private static let currentVaultFormatVersion = 2
+    private static let currentPayloadFormatVersion = 2
     private static let validationPayloadPlaintext = Data([
         0x57, 0x72, 0x69, 0x74, 0x65, 0x72, 0x20, 0x76,
         0x61, 0x75, 0x6c, 0x74, 0x20, 0x76, 0x31
@@ -34,16 +39,23 @@ struct VaultService {
     init(
         fileManager: FileManager = .default,
         keyDerivationService: KeyDerivationService = KeyDerivationService(),
-        cryptoService: CryptoService = CryptoService()
+        cryptoService: CryptoService = CryptoService(),
+        applicationSupportDirectory: URL? = nil,
+        newVaultIterationCount: UInt32 = KeyDerivationService.defaultIterationCount
     ) {
         self.fileManager = fileManager
         self.keyDerivationService = keyDerivationService
         self.cryptoService = cryptoService
+        applicationSupportDirectoryOverride = applicationSupportDirectory
+        self.newVaultIterationCount = newVaultIterationCount
     }
 
     var applicationSupportDirectory: URL {
         get throws {
-            try fileManager.url(
+            if let applicationSupportDirectoryOverride {
+                return applicationSupportDirectoryOverride
+            }
+            return try fileManager.url(
                 for: .applicationSupportDirectory,
                 in: .userDomainMask,
                 appropriateFor: nil,
@@ -136,7 +148,7 @@ struct VaultService {
     func createVault(password: String) throws -> VaultUnlockResult {
         try ensureVaultDirectoryExists()
 
-        let metadata = try keyDerivationService.makeMetadata()
+        let metadata = try keyDerivationService.makeMetadata(iterations: newVaultIterationCount)
         let key = try keyDerivationService.deriveKey(from: password, metadata: metadata)
         let payload = VaultPayload.singleEditorNote(body: "")
         let payloadData = try encodePayload(payload)
@@ -145,10 +157,11 @@ struct VaultService {
             using: key
         )
         let vaultFile = VaultFile(
-            formatVersion: 1,
+            formatVersion: Self.currentVaultFormatVersion,
             createdAt: Date(),
             keyDerivation: VaultKeyDerivationMetadata(metadata: metadata),
             encryption: .aes256GCM,
+            payloadEncoding: VaultPayloadEncoding.binaryPropertyList,
             encryptedPayload: VaultEncryptedPayload(payload: encryptedPayload)
         )
 
@@ -189,8 +202,18 @@ struct VaultService {
             return VaultUnlockResult(key: key, payload: .singleEditorNote(body: ""))
         }
 
-        if let payload = try? Self.decoder.decode(VaultPayload.self, from: decrypted) {
+        if let payload = decodePayload(decrypted, for: vaultFile) {
+            guard (1...Self.currentPayloadFormatVersion).contains(payload.formatVersion),
+                  isValidPayload(payload)
+            else {
+                throw VaultServiceError.invalidVault
+            }
             return VaultUnlockResult(key: key, payload: payload)
+        }
+
+        if vaultFile.payloadEncoding == VaultPayloadEncoding.binaryPropertyList
+            || decrypted.first(where: { !$0.isASCIIWhitespace }) == 0x7B {
+            throw VaultServiceError.invalidVault
         }
 
         guard let editorText = String(data: decrypted, encoding: .utf8) else {
@@ -280,13 +303,18 @@ struct VaultService {
             throw VaultServiceError.missingVault
         }
 
+        if vaultFile.formatVersion == 1 {
+            _ = try archiveCurrentVaultForMigration()
+        }
+
         let plaintext = try encodePayload(payload)
         let encryptedPayload = try cryptoService.encrypt(plaintext, using: key)
         let updatedVaultFile = VaultFile(
-            formatVersion: vaultFile.formatVersion,
+            formatVersion: Self.currentVaultFormatVersion,
             createdAt: vaultFile.createdAt,
             keyDerivation: vaultFile.keyDerivation,
             encryption: vaultFile.encryption,
+            payloadEncoding: VaultPayloadEncoding.binaryPropertyList,
             encryptedPayload: VaultEncryptedPayload(payload: encryptedPayload)
         )
 
@@ -327,12 +355,13 @@ struct VaultService {
 
     private func makeNewVaultFile() throws -> VaultFile {
         VaultFile(
-            formatVersion: 1,
+            formatVersion: Self.currentVaultFormatVersion,
             createdAt: Date(),
             keyDerivation: VaultKeyDerivationMetadata(
-                metadata: try keyDerivationService.makeMetadata()
+                metadata: try keyDerivationService.makeMetadata(iterations: newVaultIterationCount)
             ),
             encryption: .aes256GCM,
+            payloadEncoding: VaultPayloadEncoding.binaryPropertyList,
             encryptedPayload: .emptyPlaceholder
         )
     }
@@ -356,8 +385,18 @@ struct VaultService {
     }
 
     private func isSupportedVaultFile(_ vaultFile: VaultFile) -> Bool {
-        vaultFile.formatVersion == 1
-            && vaultFile.encryption.algorithm == VaultEncryptionMetadata.aes256GCM.algorithm
+        guard vaultFile.encryption.algorithm == VaultEncryptionMetadata.aes256GCM.algorithm else {
+            return false
+        }
+
+        switch vaultFile.formatVersion {
+        case 1:
+            return vaultFile.payloadEncoding == nil || vaultFile.payloadEncoding == VaultPayloadEncoding.json
+        case Self.currentVaultFormatVersion:
+            return vaultFile.payloadEncoding == VaultPayloadEncoding.binaryPropertyList
+        default:
+            return false
+        }
     }
 
     private func writeVaultFile(_ vaultFile: VaultFile, to url: URL) throws {
@@ -370,7 +409,81 @@ struct VaultService {
     }
 
     private func encodePayload(_ payload: VaultPayload) throws -> Data {
-        try Self.encoder.encode(payload)
+        try Self.propertyListEncoder.encode(payload)
+    }
+
+    private func decodePayload(_ data: Data, for vaultFile: VaultFile) -> VaultPayload? {
+        if vaultFile.payloadEncoding == VaultPayloadEncoding.binaryPropertyList {
+            return try? Self.propertyListDecoder.decode(VaultPayload.self, from: data)
+        }
+
+        return try? Self.decoder.decode(VaultPayload.self, from: data)
+    }
+
+    private func isValidPayload(_ payload: VaultPayload) -> Bool {
+        for note in payload.notes {
+            guard let richContent = note.richContent else {
+                continue
+            }
+
+            guard richContent.imageDisplayWidths.values.allSatisfy({ $0.isFinite && (0.10...1).contains($0) }),
+                  let attributedString = NSAttributedString(
+                    rtfd: richContent.rtfdData,
+                    documentAttributes: nil
+                  )
+            else {
+                return false
+            }
+
+            var isValid = true
+            guard Set(richContent.imageAttachmentIDs).count == richContent.imageAttachmentIDs.count else {
+                return false
+            }
+
+            let sourceIDs = richContent.imageSources.map(\.id)
+            guard sourceIDs.count == richContent.imageAttachmentIDs.count,
+                  Set(sourceIDs) == Set(richContent.imageAttachmentIDs),
+                  richContent.imageSources.allSatisfy({
+                      !$0.filenameExtension.isEmpty
+                          && !$0.typeIdentifier.isEmpty
+                          && NSImage(data: $0.data) != nil
+                  })
+            else {
+                return false
+            }
+
+            var attachmentCount = 0
+            let range = NSRange(location: 0, length: attributedString.length)
+            attributedString.enumerateAttribute(.attachment, in: range) { value, _, stop in
+                guard value != nil else {
+                    return
+                }
+                guard value as? NSTextAttachment != nil else {
+                    isValid = false
+                    stop.pointee = true
+                    return
+                }
+                attachmentCount += 1
+            }
+
+            guard isValid,
+                  attachmentCount == richContent.imageAttachmentIDs.count,
+                  richContent.imageDisplayWidths.keys.allSatisfy({
+                      richContent.imageAttachmentIDs.contains($0)
+                  })
+            else {
+                return false
+            }
+        }
+        return true
+    }
+
+    private func archiveCurrentVaultForMigration() throws -> URL {
+        let sourceURL = try vaultFileURL
+        let archivedURL = try availableArchivedVaultURL(reason: "migration")
+        try fileManager.copyItem(at: sourceURL, to: archivedURL)
+        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: archivedURL.path)
+        return archivedURL
     }
 
     private func availableArchivedVaultURL(reason: String) throws -> URL {
@@ -402,6 +515,13 @@ struct VaultService {
     private func isArchivedVaultFileName(_ fileName: String) -> Bool {
         fileName.hasPrefix("vault.writer.archived.")
             || fileName.hasPrefix("vault.writer.corrupt.")
+            || fileName.hasPrefix("vault.writer.migration.")
+    }
+}
+
+private extension UInt8 {
+    var isASCIIWhitespace: Bool {
+        self == 0x20 || self == 0x09 || self == 0x0A || self == 0x0D
     }
 }
 
@@ -418,4 +538,12 @@ private extension VaultService {
         decoder.dateDecodingStrategy = .iso8601
         return decoder
     }()
+
+    static let propertyListEncoder: PropertyListEncoder = {
+        let encoder = PropertyListEncoder()
+        encoder.outputFormat = .binary
+        return encoder
+    }()
+
+    static let propertyListDecoder = PropertyListDecoder()
 }

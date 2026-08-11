@@ -5,7 +5,13 @@ struct VaultFile: Codable, Equatable {
     let createdAt: Date
     let keyDerivation: VaultKeyDerivationMetadata
     let encryption: VaultEncryptionMetadata
+    let payloadEncoding: String?
     let encryptedPayload: VaultEncryptedPayload
+}
+
+enum VaultPayloadEncoding {
+    static let json = "json"
+    static let binaryPropertyList = "binary-plist"
 }
 
 struct VaultKeyDerivationMetadata: Codable, Equatable {

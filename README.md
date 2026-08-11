@@ -1,10 +1,12 @@
 # Mac pastebin
 
-A local encrypted notes app for macOS, written in SwiftUI.
+A local encrypted rich-text notes app for macOS, written with SwiftUI and AppKit. Notes support font formatting and encrypted inline still images.
 
 Notes are stored in `~/Library/Application Support/Writer/vault.writer`. The vault is encrypted with AES-256-GCM using a key derived from the user's password with PBKDF2-HMAC-SHA256. No password or derived key is written to disk.
 
 See [ENCRYPTION.md](ENCRYPTION.md) for the vault format, threat model, password guidance, recovery limitations, and operational considerations.
+
+Deferred media-vault and appearance work is documented in [ROADMAP.md](ROADMAP.md).
 
 ## Build setup
 

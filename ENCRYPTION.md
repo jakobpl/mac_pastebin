@@ -4,7 +4,7 @@
 
 1. A new vault receives a random 16-byte salt from `SecRandomCopyBytes`.
 2. PBKDF2-HMAC-SHA256 derives a 32-byte key from the UTF-8 password, salt, and stored iteration count. New vaults use 600,000 iterations. Existing vaults continue using the count recorded when they were created.
-3. The complete notes payload, including note titles and timestamps, is encoded as JSON and sealed with AES-256-GCM through CryptoKit. CryptoKit generates a fresh nonce for every save.
+3. The complete notes payload, including note titles, timestamps, rich-text formatting, and original inline-image bytes, is encoded as a binary property list and sealed with AES-256-GCM through CryptoKit. CryptoKit generates a fresh nonce for every save. Version 1 JSON payloads remain readable and are migrated on save.
 4. The vault file stores the salt, KDF settings, nonce, ciphertext, and authentication tag. These values do not need to be secret. The password and derived key are not stored.
 5. Unlocking derives the same key and asks AES-GCM to authenticate and decrypt the payload. A wrong password, changed ciphertext, or changed authentication tag fails authentication.
 
@@ -16,7 +16,7 @@ The design protects vault contents copied from disk or backups, provided the pas
 
 It does not protect plaintext while the vault is unlocked. A process with access to the user's session may be able to read memory, observe keystrokes, capture the screen, or inspect copied text. Swift strings and UI controls can make internal copies, so the app cannot guarantee complete password or plaintext zeroization.
 
-The outer vault header is not encrypted. It reveals the format version, creation time, algorithms, KDF work factor, salt, nonce, ciphertext length, and authentication tag. Note content, titles, and note timestamps are inside the encrypted payload.
+The outer vault header is not encrypted. It reveals the format version, payload encoding, creation time, algorithms, KDF work factor, salt, nonce, ciphertext length, and authentication tag. Note content, titles, note timestamps, formatting, attachment names, image bytes, and display sizes are inside the encrypted payload.
 
 ## Passwords and recovery
 
@@ -31,6 +31,8 @@ The outer vault header is not encrypted. It reveals the format version, creation
 - Keep encrypted backups of `vault.writer` and any archived vaults. Test that backups can be restored. Backups remain tied to the password used when each vault was created.
 - Copying a note places plaintext on the system clipboard. By default Writer preserves that value when locking so it remains available for pasting. An internal `clearClipboardOnLock` policy can opt into clearing Writer's unchanged clipboard value; clipboard managers may retain independent history regardless.
 - Writer saves pending changes before locking. A disk-full, permissions, or hardware failure can still prevent a save, so backups remain important.
+- The first save of a version 1 vault creates an encrypted `vault.writer.migration.*` rollback archive before atomically replacing the current file with version 2.
+- Inline images are decrypted in memory while the vault is unlocked. Writer does not create its own plaintext attachment or thumbnail cache.
 - Archived vaults are still encrypted, but they remain sensitive: weak or reused passwords can be attacked offline indefinitely.
 - Do not reuse an AES-GCM nonce with the same key. Writer delegates nonce generation to CryptoKit and creates a new sealed box on every save.
 - Any future vault-format change should use a new format version, preserve authenticated decryption, strictly bound attacker-controlled KDF parameters, and include a tested migration and rollback path.

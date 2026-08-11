@@ -177,6 +177,10 @@ final class AppState: ObservableObject {
         editorStatusMessage = "Copied."
     }
 
+    func reportEditorError(_ message: String) {
+        editorStatusMessage = message
+    }
+
     func setAutoSaveEnabled(_ isEnabled: Bool) {
         isAutoSaveEnabled = isEnabled
 
@@ -216,12 +220,36 @@ final class AppState: ObservableObject {
         return notes[selectedNoteIndex].body
     }
 
+    var selectedNoteRichContent: VaultRichContent? {
+        guard let selectedNoteIndex else {
+            return nil
+        }
+
+        return notes[selectedNoteIndex].richContent
+    }
+
     func updateSelectedNoteBody(_ body: String) {
         guard let selectedNoteIndex else {
             return
         }
 
         notes[selectedNoteIndex].body = body
+        if !notes[selectedNoteIndex].isTitleFinalized,
+           let title = titleFromFirstFiveWords(in: body) {
+            notes[selectedNoteIndex].title = title
+            notes[selectedNoteIndex].isTitleFinalized = true
+        }
+        notes[selectedNoteIndex].updatedAt = Date()
+        markPayloadChanged()
+    }
+
+    func updateSelectedNoteContent(body: String, richContent: VaultRichContent) {
+        guard let selectedNoteIndex else {
+            return
+        }
+
+        notes[selectedNoteIndex].body = body
+        notes[selectedNoteIndex].richContent = richContent
         if !notes[selectedNoteIndex].isTitleFinalized,
            let title = titleFromFirstFiveWords(in: body) {
             notes[selectedNoteIndex].title = title
@@ -399,7 +427,7 @@ final class AppState: ObservableObject {
 
     private func currentPayload() -> VaultPayload {
         VaultPayload(
-            formatVersion: 1,
+            formatVersion: 2,
             notes: notes,
             selectedNoteID: selectedNoteID
         )

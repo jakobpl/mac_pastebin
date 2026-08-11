@@ -2,8 +2,8 @@ import SwiftUI
 
 enum WriterPalette {
     static let shell = Color(red: 0.020, green: 0.090, blue: 0.145)
-    static let glassTint = Color(red: 0.80, green: 0.92, blue: 0.98)
-    static let glassTintElevated = Color(red: 0.88, green: 0.98, blue: 0.96)
+    static let glassTint = Color(white: 0.97)
+    static let glassTintElevated = Color.white
     static let paper = Color(red: 0.985, green: 0.965, blue: 0.910)
     static let paperTop = Color(red: 0.955, green: 0.975, blue: 0.990)
     static let paperInk = Color(red: 0.035, green: 0.045, blue: 0.055)
@@ -26,13 +26,13 @@ struct WriterBackdrop: View {
         ZStack {
             Rectangle()
                 .fill(.ultraThinMaterial)
-                .opacity(0.78)
+                .opacity(0.68)
 
             Rectangle()
-                .fill(WriterPalette.shell.opacity(0.16))
+                .fill(Color.white.opacity(0.16))
 
             Rectangle()
-                .fill(WriterPalette.glassTint.opacity(0.06))
+                .fill(Color.black.opacity(0.025))
         }
         .ignoresSafeArea()
     }
@@ -129,18 +129,16 @@ extension View {
     }
 
     func writerInputChrome(cornerRadius: CGFloat = 14) -> some View {
-        padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background {
+        background {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .fill(.clear)
                     .glassEffect(
-                        .regular.tint(WriterPalette.glassTintElevated.opacity(0.34)),
+                        .regular.tint(WriterPalette.glassTintElevated.opacity(0.24)),
                         in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     )
                     .overlay {
                         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                            .fill(Color.white.opacity(0.10))
+                            .fill(Color.white.opacity(0.18))
                     }
             }
             .overlay {
@@ -159,11 +157,11 @@ extension View {
                 )
                 .overlay {
                     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(Color.white.opacity(0.10))
+                        .fill(Color.white.opacity(0.18))
                 }
                 .overlay {
                     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(WriterPalette.glassTintElevated.opacity(tintOpacity * 0.12))
+                        .fill(WriterPalette.glassTintElevated.opacity(tintOpacity * 0.18))
                 }
         }
             .overlay {

@@ -7,7 +7,7 @@ struct UnlockView: View {
     @State private var isConfirmingVaultReplacement = false
     @State private var isConfirmingNewVault = false
     @State private var archivedVaultPendingDeletion: VaultService.ArchivedVault?
-    @FocusState private var isPasswordFocused: Bool
+    @State private var shouldFocusPassword = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -42,7 +42,7 @@ struct UnlockView: View {
             }
         }
         .onAppear {
-            isPasswordFocused = true
+            shouldFocusPassword = true
         }
         .onChange(of: appState.canReplaceCorruptedVault) { _, canReplace in
             if !canReplace {
@@ -104,18 +104,16 @@ struct UnlockView: View {
     }
 
     private var passwordField: some View {
-        SecureField("Password", text: $password)
-            .textFieldStyle(.plain)
-            .font(.system(size: 20, weight: .regular))
-            .foregroundStyle(WriterPalette.paperInk.opacity(0.70))
-            .tint(WriterPalette.paperInk.opacity(0.70))
-            .frame(height: 28)
+        WriterSecurePasswordField(
+            text: $password,
+            placeholder: "Password",
+            accessibilityLabel: appState.vaultNeedsCreation ? "Create vault password" : "Vault password",
+            requestsInitialFocus: shouldFocusPassword,
+            onSubmit: submitPassword
+        )
+            .frame(height: 48)
             .writerInputChrome(cornerRadius: 24)
             .frame(maxWidth: 520)
-            .focusEffectDisabled()
-            .focused($isPasswordFocused)
-            .onSubmit(submitPassword)
-            .accessibilityLabel(appState.vaultNeedsCreation ? "Create vault password" : "Vault password")
     }
 
     @ViewBuilder

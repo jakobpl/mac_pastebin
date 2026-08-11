@@ -16,7 +16,7 @@ struct VaultPayload: Codable, Equatable {
         )
 
         return VaultPayload(
-            formatVersion: 1,
+            formatVersion: 2,
             notes: [note],
             selectedNoteID: note.id
         )
@@ -32,6 +32,53 @@ struct VaultPayload: Codable, Equatable {
     }
 }
 
+struct VaultRichContent: Codable, Equatable {
+    var rtfdData: Data
+    var imageAttachmentIDs: [String]
+    var imageDisplayWidths: [String: Double]
+    var imageSources: [VaultImageSource]
+
+    private enum CodingKeys: String, CodingKey {
+        case rtfdData
+        case imageAttachmentIDs
+        case imageDisplayWidths
+        case imageSources
+    }
+
+    init(
+        rtfdData: Data,
+        imageAttachmentIDs: [String] = [],
+        imageDisplayWidths: [String: Double] = [:],
+        imageSources: [VaultImageSource] = []
+    ) {
+        self.rtfdData = rtfdData
+        self.imageAttachmentIDs = imageAttachmentIDs
+        self.imageDisplayWidths = imageDisplayWidths
+        self.imageSources = imageSources
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        rtfdData = try container.decode(Data.self, forKey: .rtfdData)
+        imageDisplayWidths = try container.decodeIfPresent(
+            [String: Double].self,
+            forKey: .imageDisplayWidths
+        ) ?? [:]
+        imageAttachmentIDs = try container.decodeIfPresent(
+            [String].self,
+            forKey: .imageAttachmentIDs
+        ) ?? imageDisplayWidths.keys.sorted()
+        imageSources = try container.decodeIfPresent([VaultImageSource].self, forKey: .imageSources) ?? []
+    }
+}
+
+struct VaultImageSource: Codable, Equatable {
+    let id: String
+    let data: Data
+    let typeIdentifier: String
+    let filenameExtension: String
+}
+
 struct VaultNote: Codable, Equatable, Identifiable {
     let id: String
     var title: String
@@ -39,6 +86,7 @@ struct VaultNote: Codable, Equatable, Identifiable {
     let createdAt: Date
     var updatedAt: Date
     var isTitleFinalized: Bool
+    var richContent: VaultRichContent?
 
     private enum CodingKeys: String, CodingKey {
         case id
@@ -47,6 +95,7 @@ struct VaultNote: Codable, Equatable, Identifiable {
         case createdAt
         case updatedAt
         case isTitleFinalized
+        case richContent
     }
 
     init(
@@ -55,7 +104,8 @@ struct VaultNote: Codable, Equatable, Identifiable {
         body: String,
         createdAt: Date,
         updatedAt: Date,
-        isTitleFinalized: Bool
+        isTitleFinalized: Bool,
+        richContent: VaultRichContent? = nil
     ) {
         self.id = id
         self.title = title
@@ -63,6 +113,7 @@ struct VaultNote: Codable, Equatable, Identifiable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.isTitleFinalized = isTitleFinalized
+        self.richContent = richContent
     }
 
     init(from decoder: Decoder) throws {
@@ -74,5 +125,6 @@ struct VaultNote: Codable, Equatable, Identifiable {
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
         isTitleFinalized = try container.decodeIfPresent(Bool.self, forKey: .isTitleFinalized)
             ?? (title.localizedCaseInsensitiveCompare("Untitled") != .orderedSame)
+        richContent = try container.decodeIfPresent(VaultRichContent.self, forKey: .richContent)
     }
 }

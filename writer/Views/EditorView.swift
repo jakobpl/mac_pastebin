@@ -13,6 +13,9 @@ struct EditorView: View {
     @State private var notePendingDeletion: VaultNote?
     @State private var isEditingTitle = false
     @State private var titleDraft = ""
+    @State private var fontFamilyDraft = NSFont.systemFont(ofSize: 19).familyName ?? "System Font"
+    @State private var fontSizeDraft = "19"
+    @StateObject private var richTextContext = RichTextEditorContext()
     @FocusState private var focusedArea: FocusArea?
 
     var body: some View {
@@ -33,6 +36,12 @@ struct EditorView: View {
         .onAppear {
             focusedArea = .editor
             titleDraft = selectedNoteTitle
+            DispatchQueue.main.async {
+                richTextContext.focusEditor()
+            }
+        }
+        .onDisappear {
+            richTextContext.clear()
         }
         .onChange(of: focusedArea) { oldFocus, newFocus in
             if oldFocus == .title && newFocus != .title {
@@ -43,6 +52,19 @@ struct EditorView: View {
             if !isEditingTitle {
                 titleDraft = selectedNoteTitle
             }
+            DispatchQueue.main.async {
+                richTextContext.focusEditor()
+            }
+        }
+        .onChange(of: richTextContext.fontFamily) { _, family in
+            fontFamilyDraft = family ?? ""
+        }
+        .onChange(of: richTextContext.fontSize) { _, size in
+            guard let size else {
+                fontSizeDraft = "—"
+                return
+            }
+            fontSizeDraft = String(format: size.rounded() == size ? "%.0f" : "%.1f", size)
         }
         .onMoveCommand { direction in
             guard focusedArea == .noteList else {
@@ -299,6 +321,8 @@ struct EditorView: View {
             .padding(.horizontal, 26)
             .frame(height: 78)
 
+            formattingToolbar
+
             ZStack(alignment: .bottomTrailing) {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .fill(WriterPalette.paper)
@@ -307,23 +331,168 @@ struct EditorView: View {
                             .strokeBorder(Color.white.opacity(0.58), lineWidth: 1)
                     }
 
-                TextEditor(
-                    text: Binding(
-                        get: { appState.selectedNoteBody },
-                        set: { appState.updateSelectedNoteBody($0) }
-                    )
+                RichTextEditor(
+                    noteID: appState.selectedNoteID,
+                    plainText: appState.selectedNoteBody,
+                    richContent: appState.selectedNoteRichContent,
+                    context: richTextContext,
+                    onChange: { body, richContent in
+                        appState.updateSelectedNoteContent(body: body, richContent: richContent)
+                    },
+                    onError: { message in
+                        appState.reportEditorError(message)
+                    },
+                    onFocus: {
+                        focusedArea = .editor
+                    }
                 )
-                .font(.system(size: 19, weight: .regular))
-                .foregroundStyle(WriterPalette.paperInk)
-                .scrollContentBackground(.hidden)
-                .padding(22)
-                .focused($focusedArea, equals: .editor)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             }
             .padding(.horizontal, 14)
             .padding(.bottom, 14)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .liquidGlassSurface(cornerRadius: WriterLayout.panelRadius, tintOpacity: 0.28)
+    }
+
+    private var formattingToolbar: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 10) {
+            HoverFormattingPicker(
+                title: fontFamilyDraft.isEmpty ? "Mixed fonts" : fontFamilyDraft,
+                accessibilityLabel: "Font family",
+                values: NSFontManager.shared.availableFontFamilies.sorted(),
+                width: 190,
+                preview: richTextContext.previewFontFamily,
+                commit: { family in
+                    fontFamilyDraft = family
+                    richTextContext.commitFormattingPreview()
+                },
+                cancel: richTextContext.cancelFormattingPreview,
+                row: { family in
+                    Text(family)
+                        .font(.custom(family, size: 13))
+                }
+            )
+
+            HoverFormattingPicker(
+                title: fontSizeDraft,
+                accessibilityLabel: "Font size",
+                values: [8, 9, 10, 11, 12, 14, 16, 18, 19, 20, 24, 28, 32, 36, 48, 64, 72, 96, 120, 144],
+                width: 66,
+                preview: { richTextContext.previewFontSize(Double($0)) },
+                commit: { size in
+                    fontSizeDraft = "\(size)"
+                    richTextContext.commitFormattingPreview()
+                },
+                cancel: richTextContext.cancelFormattingPreview,
+                row: { size in Text("\(size)") }
+            )
+
+            formattingButton(
+                systemImage: richTextContext.isBold == nil ? "bold" : "bold",
+                help: richTextContext.isBold == nil ? "Bold (mixed selection)" : "Bold",
+                isActive: richTextContext.isBold == true,
+                action: richTextContext.toggleBold
+            )
+            .keyboardShortcut("b", modifiers: .command)
+
+            formattingButton(
+                systemImage: "italic",
+                help: richTextContext.isItalic == nil ? "Italic (mixed selection)" : "Italic",
+                isActive: richTextContext.isItalic == true,
+                action: richTextContext.toggleItalic
+            )
+            .keyboardShortcut("i", modifiers: .command)
+
+            HoverColorPicker(
+                selectedColor: richTextContext.textColor,
+                preview: richTextContext.previewTextColor,
+                commit: { _ in richTextContext.commitFormattingPreview() },
+                cancel: richTextContext.cancelFormattingPreview
+            )
+            .help("Font color")
+
+            Divider()
+                .frame(height: 24)
+
+            formattingButton(
+                systemImage: "photo.badge.plus",
+                help: "Insert image",
+                isActive: false,
+                action: richTextContext.insertImage
+            )
+
+            if let selectedImageWidth = richTextContext.selectedImageWidth {
+                Divider()
+                    .frame(height: 24)
+
+                Image(systemName: "photo")
+                    .foregroundStyle(WriterPalette.paperInk.opacity(0.65))
+
+                Slider(
+                    value: Binding(
+                        get: { selectedImageWidth },
+                        set: richTextContext.applySelectedImageWidth
+                    ),
+                    in: 10...100,
+                    step: 5
+                )
+                .frame(minWidth: 90, maxWidth: 150)
+                .accessibilityLabel("Image width")
+
+                Text("\(Int(selectedImageWidth.rounded()))%")
+                    .font(.system(size: 12, weight: .medium).monospacedDigit())
+                    .foregroundStyle(WriterPalette.paperInk.opacity(0.70))
+                    .frame(width: 38, alignment: .trailing)
+
+                Button {
+                    richTextContext.applySelectedImageWidth(100)
+                } label: {
+                    Text("Fit")
+                        .frame(minWidth: 36, minHeight: 34)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .contentShape(Rectangle())
+                .help("Fit image to text width")
+            }
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 20)
+        }
+        .scrollIndicators(.hidden)
+        .frame(height: 52)
+        .background(Color.white.opacity(0.12))
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Color.white.opacity(0.34))
+                .frame(height: 1)
+        }
+    }
+
+    private func formattingButton(
+        systemImage: String,
+        help: String,
+        isActive: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(WriterPalette.paperInk.opacity(0.78))
+                .frame(width: 34, height: 34)
+                .background(
+                    isActive ? WriterPalette.sage.opacity(0.55) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+        .help(help)
+        .accessibilityLabel(help)
     }
 
     @ViewBuilder
@@ -408,5 +577,227 @@ struct EditorView: View {
                 }
             }
         )
+    }
+}
+
+private struct HoverFormattingPicker<Value: Hashable, Row: View>: View {
+    let title: String
+    let accessibilityLabel: String
+    let values: [Value]
+    let width: CGFloat
+    let preview: (Value) -> Void
+    let commit: (Value) -> Void
+    let cancel: () -> Void
+    @ViewBuilder let row: (Value) -> Row
+
+    @State private var isPresented = false
+    @State private var hoveredValue: Value?
+    @State private var keyboardIndex: Int?
+
+    var body: some View {
+        Button {
+            isPresented.toggle()
+        } label: {
+            HStack(spacing: 6) {
+                Text(title)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+            }
+            .padding(.horizontal, 9)
+            .frame(width: width, height: 30)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.bordered)
+        .accessibilityLabel(accessibilityLabel)
+        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            ScrollViewReader { proxy in
+                VStack(spacing: 0) {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 2) {
+                            ForEach(values, id: \.self) { value in
+                                Button {
+                                    preview(value)
+                                    commit(value)
+                                    hoveredValue = nil
+                                    isPresented = false
+                                } label: {
+                                    row(value)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.horizontal, 10)
+                                        .frame(height: 30)
+                                        .background(
+                                            highlightedValue == value ? Color.accentColor.opacity(0.16) : Color.clear,
+                                            in: RoundedRectangle(cornerRadius: 6)
+                                        )
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .id(value)
+                                .onHover { isHovering in
+                                    if isHovering {
+                                        keyboardIndex = nil
+                                        hoveredValue = value
+                                        preview(value)
+                                    } else if hoveredValue == value {
+                                        hoveredValue = nil
+                                        cancel()
+                                    }
+                                }
+                            }
+                        }
+                        .padding(6)
+                    }
+                    .frame(width: max(width, 150), height: min(CGFloat(values.count * 32 + 12), 360))
+                    .onAppear {
+                        keyboardIndex = values.firstIndex { String(describing: $0) == title }
+                        if let highlightedValue {
+                            proxy.scrollTo(highlightedValue, anchor: .center)
+                        }
+                    }
+
+                    Button("Apply") {
+                        guard let highlightedValue else { return }
+                        preview(highlightedValue)
+                        commit(highlightedValue)
+                        self.hoveredValue = nil
+                        isPresented = false
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .frame(width: 0, height: 0)
+                    .opacity(0)
+                    .disabled(highlightedValue == nil)
+                }
+                .focusable()
+                .onMoveCommand { direction in
+                    guard !values.isEmpty else { return }
+                    let current = keyboardIndex ?? -1
+                    switch direction {
+                    case .down:
+                        keyboardIndex = min(current + 1, values.count - 1)
+                    case .up:
+                        keyboardIndex = max(current < 0 ? values.count - 1 : current - 1, 0)
+                    default:
+                        return
+                    }
+                    hoveredValue = nil
+                    if let keyboardIndex {
+                        let value = values[keyboardIndex]
+                        preview(value)
+                        proxy.scrollTo(value, anchor: .center)
+                    }
+                }
+                .onExitCommand {
+                    isPresented = false
+                }
+                .onDisappear {
+                    hoveredValue = nil
+                    keyboardIndex = nil
+                    cancel()
+                }
+            }
+        }
+    }
+
+    private var highlightedValue: Value? {
+        hoveredValue ?? keyboardIndex.map { values[$0] }
+    }
+}
+
+private struct HoverColorPicker: View {
+    private struct Choice: Identifiable {
+        let id: String
+        let name: String
+        let color: NSColor
+    }
+
+    let selectedColor: NSColor
+    let preview: (NSColor) -> Void
+    let commit: (NSColor) -> Void
+    let cancel: () -> Void
+
+    @State private var isPresented = false
+    @State private var hoveredID: String?
+
+    private let choices = [
+        Choice(id: "ink", name: "Ink", color: .writerPaperInk),
+        Choice(id: "black", name: "Black", color: .black),
+        Choice(id: "gray", name: "Gray", color: .systemGray),
+        Choice(id: "red", name: "Red", color: .systemRed),
+        Choice(id: "orange", name: "Orange", color: .systemOrange),
+        Choice(id: "yellow", name: "Yellow", color: .systemYellow),
+        Choice(id: "green", name: "Green", color: .systemGreen),
+        Choice(id: "blue", name: "Blue", color: .systemBlue),
+        Choice(id: "purple", name: "Purple", color: .systemPurple),
+        Choice(id: "pink", name: "Pink", color: .systemPink)
+    ]
+
+    var body: some View {
+        Button {
+            isPresented.toggle()
+        } label: {
+            VStack(spacing: 2) {
+                Image(systemName: "character")
+                    .font(.system(size: 14, weight: .semibold))
+                Rectangle()
+                    .fill(Color(nsColor: selectedColor))
+                    .frame(width: 18, height: 3)
+            }
+            .frame(width: 32, height: 30)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Font color")
+        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            VStack(spacing: 0) {
+                LazyVGrid(columns: Array(repeating: GridItem(.fixed(34)), count: 5), spacing: 8) {
+                    ForEach(choices) { choice in
+                        Button {
+                            preview(choice.color)
+                            commit(choice.color)
+                            hoveredID = nil
+                            isPresented = false
+                        } label: {
+                            Circle()
+                                .fill(Color(nsColor: choice.color))
+                                .overlay {
+                                    Circle().strokeBorder(Color.primary.opacity(0.18), lineWidth: 1)
+                                }
+                                .padding(hoveredID == choice.id ? 2 : 5)
+                                .frame(width: 34, height: 34)
+                        }
+                        .buttonStyle(.plain)
+                        .help(choice.name)
+                        .onHover { isHovering in
+                            if isHovering {
+                                hoveredID = choice.id
+                                preview(choice.color)
+                            } else if hoveredID == choice.id {
+                                hoveredID = nil
+                                cancel()
+                            }
+                        }
+                    }
+                }
+                .padding(10)
+
+                Button("Apply") {
+                    guard let choice = choices.first(where: { $0.id == hoveredID }) else { return }
+                    commit(choice.color)
+                    hoveredID = nil
+                    isPresented = false
+                }
+                .keyboardShortcut(.defaultAction)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+                .disabled(hoveredID == nil)
+            }
+            .onDisappear {
+                hoveredID = nil
+                cancel()
+            }
+        }
     }
 }
