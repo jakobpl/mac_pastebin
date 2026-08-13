@@ -87,6 +87,9 @@ struct EditorView: View {
 
                 TextField("Title", text: $renameTitle)
                     .textFieldStyle(.roundedBorder)
+                    .onSubmit {
+                        commitPendingRename(note)
+                    }
 
                 HStack {
                     Spacer()
@@ -96,9 +99,9 @@ struct EditorView: View {
                     }
 
                     Button("Rename") {
-                        appState.renameNote(id: note.id, title: renameTitle)
-                        notePendingRename = nil
+                        commitPendingRename(note)
                     }
+                    .keyboardShortcut(.defaultAction)
                 }
             }
             .padding()
@@ -423,40 +426,29 @@ struct EditorView: View {
                 action: richTextContext.insertImage
             )
 
-            if let selectedImageWidth = richTextContext.selectedImageWidth {
-                Divider()
-                    .frame(height: 24)
+            Divider()
+                .frame(height: 24)
 
-                Image(systemName: "photo")
-                    .foregroundStyle(WriterPalette.paperInk.opacity(0.65))
+            formattingButton(
+                systemImage: "text.alignleft",
+                help: "Align left (Command-Shift-L)",
+                isActive: richTextContext.textAlignment == .left,
+                action: richTextContext.alignLeft
+            )
 
-                Slider(
-                    value: Binding(
-                        get: { selectedImageWidth },
-                        set: richTextContext.applySelectedImageWidth
-                    ),
-                    in: 10...100,
-                    step: 5
-                )
-                .frame(minWidth: 90, maxWidth: 150)
-                .accessibilityLabel("Image width")
+            formattingButton(
+                systemImage: "text.aligncenter",
+                help: "Align center (Command-Shift-E)",
+                isActive: richTextContext.textAlignment == .center,
+                action: richTextContext.alignCenter
+            )
 
-                Text("\(Int(selectedImageWidth.rounded()))%")
-                    .font(.system(size: 12, weight: .medium).monospacedDigit())
-                    .foregroundStyle(WriterPalette.paperInk.opacity(0.70))
-                    .frame(width: 38, alignment: .trailing)
-
-                Button {
-                    richTextContext.applySelectedImageWidth(100)
-                } label: {
-                    Text("Fit")
-                        .frame(minWidth: 36, minHeight: 34)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.borderless)
-                .contentShape(Rectangle())
-                .help("Fit image to text width")
-            }
+            formattingButton(
+                systemImage: "text.alignright",
+                help: "Align right (Command-Shift-R)",
+                isActive: richTextContext.textAlignment == .right,
+                action: richTextContext.alignRight
+            )
 
                 Spacer(minLength: 0)
             }
@@ -464,7 +456,6 @@ struct EditorView: View {
         }
         .scrollIndicators(.hidden)
         .frame(height: 52)
-        .background(Color.white.opacity(0.12))
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(Color.white.opacity(0.34))
@@ -566,6 +557,11 @@ struct EditorView: View {
 
         appState.renameNote(id: selectedNoteID, title: titleDraft)
         titleDraft = selectedNoteTitle
+    }
+
+    private func commitPendingRename(_ note: VaultNote) {
+        appState.renameNote(id: note.id, title: renameTitle)
+        notePendingRename = nil
     }
 
     private var deleteConfirmationBinding: Binding<Bool> {

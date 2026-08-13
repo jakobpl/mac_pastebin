@@ -1,9 +1,45 @@
 import AppKit
+import Combine
 import XCTest
 @testable import writer
 
 @MainActor
 final class RichTextEditingTests: XCTestCase {
+    func testLoadingDefersSelectionStatePublicationAndSkipsDuplicateValues() {
+        let context = RichTextEditorContext()
+        var publicationCount = 0
+        let cancellable = context.objectWillChange.sink {
+            publicationCount += 1
+        }
+        let editor = RichTextEditor(
+            noteID: "note",
+            plainText: "Loaded text",
+            richContent: nil,
+            context: context,
+            onChange: { _, _ in },
+            onError: { _ in },
+            onFocus: {}
+        )
+        let coordinator = editor.makeCoordinator()
+        let textView = WriterTextView()
+        coordinator.textView = textView
+
+        coordinator.load(noteID: "note", plainText: "Loaded text", richContent: nil)
+        XCTAssertEqual(publicationCount, 0)
+
+        let selectionNotification = Notification(
+            name: NSTextView.didChangeSelectionNotification,
+            object: textView
+        )
+        coordinator.textViewDidChangeSelection(selectionNotification)
+        XCTAssertGreaterThan(publicationCount, 0)
+
+        let publicationCountAfterInitialUpdate = publicationCount
+        coordinator.textViewDidChangeSelection(selectionNotification)
+        XCTAssertEqual(publicationCount, publicationCountAfterInitialUpdate)
+        withExtendedLifetime(cancellable) {}
+    }
+
     func testFormattingPreviewCancelsWithoutSavingAndCommitCreatesOneChange() throws {
         let context = RichTextEditorContext()
         var savedChanges = 0
@@ -82,11 +118,48 @@ final class RichTextEditingTests: XCTestCase {
         coordinator.performEditorCommand(.alignCenter)
         let centered = try XCTUnwrap(textView.textStorage?.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)
         XCTAssertEqual(centered.alignment, .center)
+        XCTAssertEqual(context.textAlignment, .center)
+
+        coordinator.performEditorCommand(.alignRight)
+        let rightAligned = try XCTUnwrap(textView.textStorage?.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)
+        XCTAssertEqual(rightAligned.alignment, .right)
+        XCTAssertEqual(context.textAlignment, .right)
 
         coordinator.performEditorCommand(.bulletedList)
         let listed = try XCTUnwrap(textView.textStorage?.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle)
         XCTAssertEqual(listed.textLists.count, 1)
         XCTAssertEqual(listed.textLists.first?.markerFormat, .disc)
+    }
+
+    func testMovingImageSnapsItToAParagraphBoundaryAndAlignsItLeft() throws {
+        let context = RichTextEditorContext()
+        let editor = RichTextEditor(
+            noteID: "note",
+            plainText: "",
+            richContent: nil,
+            context: context,
+            onChange: { _, _ in },
+            onError: { _ in },
+            onFocus: {}
+        )
+        let coordinator = editor.makeCoordinator()
+        let textView = WriterTextView()
+        coordinator.textView = textView
+
+        let document = NSMutableAttributedString(string: "First paragraph\nSecond paragraph\n")
+        let imageLocation = document.length
+        document.append(NSAttributedString(attachment: NSTextAttachment()))
+        document.append(NSAttributedString(string: "\n"))
+        textView.textStorage?.setAttributedString(document)
+
+        coordinator.moveImage(from: imageLocation, to: 0)
+
+        XCTAssertTrue(textView.textStorage?.attribute(.attachment, at: 0, effectiveRange: nil) is NSTextAttachment)
+        let imageStyle = try XCTUnwrap(
+            textView.textStorage?.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        )
+        XCTAssertEqual(imageStyle.alignment, .left)
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: 0, length: 1))
     }
 
     private func fontSize(at location: Int, in textView: NSTextView) -> CGFloat {

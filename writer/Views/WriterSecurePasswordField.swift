@@ -30,21 +30,22 @@ struct WriterSecurePasswordField: NSViewRepresentable {
         context.coordinator.parent = self
 
         let field = container.textField
-        if context.coordinator.consumeResetGeneration(resetGeneration) {
-            field.abortEditing()
-            field.stringValue = ""
+        context.coordinator.performRepresentableUpdate {
+            if context.coordinator.consumeResetGeneration(resetGeneration) {
+                container.setTextPreservingFocus("")
+            } else if field.stringValue != text {
+                container.setTextPreservingFocus(text)
+            }
+            field.placeholderString = placeholder
+            field.setAccessibilityLabel(accessibilityLabel)
+            container.requestsInitialFocus = requestsInitialFocus
         }
-        if field.stringValue != text {
-            field.stringValue = text
-        }
-        field.placeholderString = placeholder
-        field.setAccessibilityLabel(accessibilityLabel)
-        container.requestsInitialFocus = requestsInitialFocus
     }
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: WriterSecurePasswordField
         private var lastResetGeneration: UInt64
+        private var isPerformingRepresentableUpdate = false
 
         init(parent: WriterSecurePasswordField) {
             self.parent = parent
@@ -59,9 +60,21 @@ struct WriterSecurePasswordField: NSViewRepresentable {
             return true
         }
 
+        func performRepresentableUpdate(_ update: () -> Void) {
+            isPerformingRepresentableUpdate = true
+            defer { isPerformingRepresentableUpdate = false }
+            update()
+        }
+
         func controlTextDidChange(_ notification: Notification) {
+            guard !isPerformingRepresentableUpdate else { return }
             guard let field = notification.object as? NSSecureTextField else { return }
             parent.text = field.stringValue
+        }
+
+        func controlTextDidBeginEditing(_ notification: Notification) {
+            guard let field = notification.object as? ReactivatingSecureTextField else { return }
+            field.secureCurrentEditor()
         }
 
         @objc func submit(_ sender: NSSecureTextField) {
@@ -76,11 +89,18 @@ final class SecurePasswordContainer: NSView {
 
     var requestsInitialFocus = false {
         didSet {
+            guard requestsInitialFocus != oldValue else { return }
+            if !requestsInitialFocus {
+                hasCompletedInitialFocusRequest = false
+            }
             requestInitialFocusIfNeeded()
         }
     }
 
     private var focusRequestIsPending = false
+    private var hasCompletedInitialFocusRequest = false
+    private var shouldRestoreFocusWhenApplicationActivates = false
+    private var focusRestoreIsPending = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -101,6 +121,12 @@ final class SecurePasswordContainer: NSView {
             textField.heightAnchor.constraint(equalToConstant: 28)
         ])
 
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(applicationWillResignActive(_:)),
+            name: NSApplication.willResignActiveNotification,
+            object: nil
+        )
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(applicationDidBecomeActive(_:)),
@@ -130,11 +156,45 @@ final class SecurePasswordContainer: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(textField)
+        guard let window else { return }
+        _ = focusPasswordField(in: window)
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    func setTextPreservingFocus(_ text: String) {
+        textField.secureCurrentEditor()
+        textField.stringValue = text
+        if let editor = textField.currentEditor(), editor.string != text {
+            editor.string = text
+        }
+    }
+
+    @discardableResult
+    func focusPasswordField(in window: NSWindow) -> Bool {
+        if let staleTextView = window.firstResponder as? NSTextView {
+            staleTextView.inputContext?.discardMarkedText()
+            staleTextView.unmarkText()
+        }
+        if window.firstResponder !== textField,
+           window.firstResponder !== textField.currentEditor() {
+            window.makeFirstResponder(nil)
+        }
+
+        textField.prepareSecureFieldEditor(in: window)
+        let focused = window.makeFirstResponder(textField)
+        textField.secureCurrentEditor()
+        return focused
     }
 
     private func requestInitialFocusIfNeeded() {
-        guard requestsInitialFocus, !focusRequestIsPending, window != nil else { return }
+        guard requestsInitialFocus,
+              !focusRequestIsPending,
+              !hasCompletedInitialFocusRequest,
+              window != nil
+        else { return }
         focusRequestIsPending = true
 
         DispatchQueue.main.async { [weak self] in
@@ -148,29 +208,155 @@ final class SecurePasswordContainer: NSView {
             else { return }
 
             let firstResponder = window.firstResponder
-            guard
-                firstResponder !== self.textField,
-                firstResponder !== self.textField.currentEditor()
-            else { return }
+            if firstResponder === self.textField || firstResponder === self.textField.currentEditor() {
+                self.hasCompletedInitialFocusRequest = true
+                return
+            }
 
-            window.makeFirstResponder(self.textField)
+            // Preserve an explicit choice of the other secure field, but do not
+            // mistake the outgoing note editor for a password field.
+            if self.isAnotherSecureFieldResponder(firstResponder, in: window) {
+                self.hasCompletedInitialFocusRequest = true
+                return
+            }
+
+            if self.focusPasswordField(in: window) {
+                self.hasCompletedInitialFocusRequest = true
+            }
         }
     }
 
+    @objc private func applicationWillResignActive(_ notification: Notification) {
+        guard let window else { return }
+        let firstResponder = window.firstResponder
+        shouldRestoreFocusWhenApplicationActivates = firstResponder === textField
+            || firstResponder === textField.currentEditor()
+    }
+
     @objc private func applicationDidBecomeActive(_ notification: Notification) {
+        restoreFocusAfterApplicationActivationIfNeeded()
         requestInitialFocusIfNeeded()
     }
 
     @objc private func windowDidBecomeKey(_ notification: Notification) {
         guard notification.object as? NSWindow === window else { return }
+        restoreFocusAfterApplicationActivationIfNeeded()
         requestInitialFocusIfNeeded()
+    }
+
+    private func restoreFocusAfterApplicationActivationIfNeeded() {
+        guard shouldRestoreFocusWhenApplicationActivates,
+              !focusRestoreIsPending,
+              window != nil
+        else { return }
+        focusRestoreIsPending = true
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.focusRestoreIsPending = false
+            guard self.shouldRestoreFocusWhenApplicationActivates,
+                  let window = self.window,
+                  NSApp.isActive,
+                  window.isKeyWindow
+            else { return }
+
+            let firstResponder = window.firstResponder
+            if firstResponder === self.textField || firstResponder === self.textField.currentEditor() {
+                self.shouldRestoreFocusWhenApplicationActivates = false
+                return
+            }
+
+            if self.isAnotherSecureFieldResponder(firstResponder, in: window) {
+                self.shouldRestoreFocusWhenApplicationActivates = false
+                return
+            }
+
+            if self.focusPasswordField(in: window) {
+                self.shouldRestoreFocusWhenApplicationActivates = false
+            }
+        }
+    }
+
+    private func isAnotherSecureFieldResponder(
+        _ responder: NSResponder?,
+        in window: NSWindow
+    ) -> Bool {
+        guard let responder, let contentView = window.contentView else {
+            return false
+        }
+
+        return secureTextFields(in: contentView).contains { field in
+            field !== textField
+                && (responder === field || responder === field.currentEditor())
+        }
+    }
+
+    private func secureTextFields(in view: NSView) -> [ReactivatingSecureTextField] {
+        var fields = view.subviews.compactMap { $0 as? ReactivatingSecureTextField }
+        for subview in view.subviews {
+            fields.append(contentsOf: secureTextFields(in: subview))
+        }
+        return fields
     }
 }
 
 /// Receives the click that reactivates the app, instead of requiring a second
 /// click before AppKit starts secure text editing again.
 final class ReactivatingSecureTextField: NSSecureTextField {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        disableTextAssistance()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        disableTextAssistance()
+    }
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         true
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        if let window {
+            prepareSecureFieldEditor(in: window)
+        }
+        let becameFirstResponder = super.becomeFirstResponder()
+        secureCurrentEditor()
+        return becameFirstResponder
+    }
+
+    func prepareSecureFieldEditor(in window: NSWindow) {
+        guard let editor = window.fieldEditor(true, for: self) as? NSTextView else {
+            return
+        }
+        Self.disableTextAssistance(in: editor)
+    }
+
+    func secureCurrentEditor() {
+        guard let editor = currentEditor() as? NSTextView else { return }
+        Self.disableTextAssistance(in: editor)
+    }
+
+    static func disableTextAssistance(in editor: NSTextView) {
+        editor.isAutomaticTextCompletionEnabled = false
+        editor.isAutomaticSpellingCorrectionEnabled = false
+        editor.isAutomaticTextReplacementEnabled = false
+        editor.isContinuousSpellCheckingEnabled = false
+        editor.isGrammarCheckingEnabled = false
+        editor.isAutomaticQuoteSubstitutionEnabled = false
+        editor.isAutomaticDashSubstitutionEnabled = false
+        editor.isAutomaticLinkDetectionEnabled = false
+        editor.isAutomaticDataDetectionEnabled = false
+        editor.enabledTextCheckingTypes = 0
+        editor.writingToolsBehavior = .none
+        editor.allowsCharacterPickerTouchBarItem = false
+    }
+
+    private func disableTextAssistance() {
+        isAutomaticTextCompletionEnabled = false
+        allowsCharacterPickerTouchBarItem = false
+        allowsWritingTools = false
+        allowsWritingToolsAffordance = false
     }
 }

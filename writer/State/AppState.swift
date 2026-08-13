@@ -42,6 +42,7 @@ final class AppState: ObservableObject {
     }
 
     func lock() {
+        endActiveTextInputSessions()
         credentialResetGeneration &+= 1
         autoSaveTask?.cancel()
         autoSaveTask = nil
@@ -59,6 +60,20 @@ final class AppState: ObservableObject {
         hasUnsavedChanges = false
         editorStatusMessage = nil
         lockState = .locked
+    }
+
+    private func endActiveTextInputSessions() {
+        Self.endActiveTextInputSessions(in: NSApp.windows)
+    }
+
+    static func endActiveTextInputSessions(in windows: [NSWindow]) {
+        for window in windows {
+            if let textView = window.firstResponder as? NSTextView {
+                textView.inputContext?.discardMarkedText()
+                textView.unmarkText()
+            }
+            window.makeFirstResponder(nil)
+        }
     }
 
     func createOrUnlockVault(password: String) {
@@ -242,6 +257,7 @@ final class AppState: ObservableObject {
             notes[selectedNoteIndex].isTitleFinalized = true
         }
         notes[selectedNoteIndex].updatedAt = Date()
+        sortNotesByRecency()
         markPayloadChanged()
     }
 
@@ -258,6 +274,7 @@ final class AppState: ObservableObject {
             notes[selectedNoteIndex].isTitleFinalized = true
         }
         notes[selectedNoteIndex].updatedAt = Date()
+        sortNotesByRecency()
         markPayloadChanged()
     }
 
@@ -316,6 +333,7 @@ final class AppState: ObservableObject {
         )
 
         notes.append(note)
+        sortNotesByRecency()
         selectedNoteID = note.id
         markPayloadChanged()
     }
@@ -329,6 +347,7 @@ final class AppState: ObservableObject {
         notes[noteIndex].title = trimmedTitle.isEmpty ? "Untitled" : String(trimmedTitle.prefix(40))
         notes[noteIndex].isTitleFinalized = true
         notes[noteIndex].updatedAt = Date()
+        sortNotesByRecency()
         hasUnsavedChanges = true
         saveCurrentPayload()
     }
@@ -418,12 +437,25 @@ final class AppState: ObservableObject {
             : payload.notes
 
         notes = loadedNotes
+        sortNotesByRecency()
 
         if let selectedNoteID = payload.selectedNoteID,
            loadedNotes.contains(where: { $0.id == selectedNoteID }) {
             self.selectedNoteID = selectedNoteID
         } else {
-            selectedNoteID = loadedNotes.first?.id
+            selectedNoteID = notes.first?.id
+        }
+    }
+
+    private func sortNotesByRecency() {
+        notes.sort { lhs, rhs in
+            if lhs.updatedAt != rhs.updatedAt {
+                return lhs.updatedAt > rhs.updatedAt
+            }
+            if lhs.createdAt != rhs.createdAt {
+                return lhs.createdAt > rhs.createdAt
+            }
+            return lhs.id < rhs.id
         }
     }
 

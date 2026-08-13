@@ -17,7 +17,6 @@ protocol RichTextEditorCommandHandling: AnyObject {
     func commitFormattingPreview()
     func performEditorCommand(_ command: EditorFormattingCommand)
     func insertImage()
-    func applySelectedImageWidth(_ fraction: Double)
     func focusEditor()
     func clearEditor()
 }
@@ -52,13 +51,9 @@ final class RichTextEditorContext: ObservableObject {
     @Published private(set) var isBold: Bool?
     @Published private(set) var isItalic: Bool?
     @Published private(set) var textColor = NSColor.writerPaperInk
-    @Published private(set) var selectedImageWidth: Double?
+    @Published private(set) var textAlignment: NSTextAlignment? = .left
 
     weak var commandHandler: RichTextEditorCommandHandling?
-
-    var hasSelectedImage: Bool {
-        selectedImageWidth != nil
-    }
 
     func applyFontFamily(_ family: String) {
         commandHandler?.applyFontFamily(family)
@@ -104,8 +99,16 @@ final class RichTextEditorContext: ObservableObject {
         commandHandler?.insertImage()
     }
 
-    func applySelectedImageWidth(_ percentage: Double) {
-        commandHandler?.applySelectedImageWidth(min(max(percentage / 100, 0.10), 1))
+    func alignLeft() {
+        commandHandler?.performEditorCommand(.alignLeft)
+    }
+
+    func alignCenter() {
+        commandHandler?.performEditorCommand(.alignCenter)
+    }
+
+    func alignRight() {
+        commandHandler?.performEditorCommand(.alignRight)
     }
 
     func focusEditor() {
@@ -123,14 +126,26 @@ final class RichTextEditorContext: ObservableObject {
         isBold: Bool?,
         isItalic: Bool?,
         textColor: NSColor,
-        selectedImageWidth: Double?
+        textAlignment: NSTextAlignment?
     ) {
-        self.fontFamily = fontFamily
-        self.fontSize = fontSize
-        self.isBold = isBold
-        self.isItalic = isItalic
-        self.textColor = textColor
-        self.selectedImageWidth = selectedImageWidth.map { $0 * 100 }
+        if self.fontFamily != fontFamily {
+            self.fontFamily = fontFamily
+        }
+        if self.fontSize != fontSize {
+            self.fontSize = fontSize
+        }
+        if self.isBold != isBold {
+            self.isBold = isBold
+        }
+        if self.isItalic != isItalic {
+            self.isItalic = isItalic
+        }
+        if !self.textColor.isEqual(textColor) {
+            self.textColor = textColor
+        }
+        if self.textAlignment != textAlignment {
+            self.textAlignment = textAlignment
+        }
     }
 }
 
@@ -300,11 +315,8 @@ struct RichTextEditor: NSViewRepresentable {
             textView.onDeleteImage = { [weak self] location in
                 self?.deleteImage(at: location)
             }
-            textView.onBeginImageResize = { [weak self] location in
-                self?.beginImageResize(at: location)
-            }
-            textView.onResizeImage = { [weak self] location, fraction in
-                self?.resizeImage(at: location, to: fraction)
+            textView.onMoveImage = { [weak self] source, destination in
+                self?.moveImage(from: source, to: destination)
             }
             textView.onViewportWidthChange = { [weak self] in
                 self?.updateAttachmentBounds()
@@ -341,8 +353,8 @@ struct RichTextEditor: NSViewRepresentable {
             textView.setSelectedRange(NSRange(location: 0, length: 0))
             assignAttachmentIdentifiers(richContent?.imageAttachmentIDs ?? [])
             updateAttachmentBounds()
-            updateSelectionState()
             isLoading = false
+            scheduleSelectionStateUpdate()
         }
 
         func textDidChange(_ notification: Notification) {
@@ -355,6 +367,9 @@ struct RichTextEditor: NSViewRepresentable {
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
+            guard !isLoading else {
+                return
+            }
             updateSelectionState()
         }
 
@@ -700,26 +715,6 @@ struct RichTextEditor: NSViewRepresentable {
             }
         }
 
-        func applySelectedImageWidth(_ fraction: Double) {
-            guard let textView,
-                  let (attachmentID, attachment) = selectedAttachment(in: textView)
-            else {
-                return
-            }
-
-            let clamped = min(max(fraction, 0.10), 1)
-            performMutation(actionName: "Resize Image") {
-                imageDisplayWidths[attachmentID] = clamped
-                if let imageSize = imageSize(for: attachment) {
-                    setBounds(for: attachment, imageSize: imageSize, widthFraction: clamped)
-                }
-                textView.layoutManager?.invalidateLayout(
-                    forCharacterRange: textView.selectedRange(),
-                    actualCharacterRange: nil
-                )
-            }
-        }
-
         func focusEditor() {
             guard let textView else {
                 return
@@ -729,12 +724,19 @@ struct RichTextEditor: NSViewRepresentable {
 
         func clearEditor() {
             isLoading = true
-            textView?.textStorage?.setAttributedString(NSAttributedString())
+            if let textView {
+                textView.inputContext?.discardMarkedText()
+                textView.unmarkText()
+                if textView.window?.firstResponder === textView {
+                    textView.window?.makeFirstResponder(nil)
+                }
+                textView.delegate = nil
+                textView.textStorage?.setAttributedString(NSAttributedString())
+            }
             imageDisplayWidths.removeAll(keepingCapacity: false)
             attachmentIDsByObject.removeAll(keepingCapacity: false)
             imageSourcesByID.removeAll(keepingCapacity: false)
             textView?.selectedImageCharacterIndex = nil
-            textView?.selectedImageWidthFraction = nil
             loadedNoteID = nil
             isLoading = false
         }
@@ -939,6 +941,12 @@ struct RichTextEditor: NSViewRepresentable {
             )
         }
 
+        private func scheduleSelectionStateUpdate() {
+            DispatchQueue.main.async { [weak self] in
+                self?.updateSelectionState()
+            }
+        }
+
         private func updateSelectionState() {
             guard let textView, let storage = textView.textStorage else {
                 return
@@ -976,7 +984,7 @@ struct RichTextEditor: NSViewRepresentable {
             let fontSizes = fonts.map { Double($0.pointSize) }
             let boldValues = fonts.map { fontManager.traits(of: $0).contains(.boldFontMask) }
             let italicValues = fonts.map { fontManager.traits(of: $0).contains(.italicFontMask) }
-            let selectedWidth = selectedAttachment(in: textView).flatMap { imageDisplayWidths[$0.0] }
+            let alignmentValues = paragraphAlignments(in: textView, storage: storage)
 
             parent.context.update(
                 fontFamily: uniformValue(in: fontFamilies),
@@ -984,15 +992,13 @@ struct RichTextEditor: NSViewRepresentable {
                 isBold: uniformValue(in: boldValues),
                 isItalic: uniformValue(in: italicValues),
                 textColor: colors.first ?? .writerPaperInk,
-                selectedImageWidth: selectedWidth
+                textAlignment: uniformValue(in: alignmentValues)
             )
 
-            if let location = selectedAttachmentLocation(in: textView), let selectedWidth {
+            if let location = selectedAttachmentLocation(in: textView) {
                 textView.selectedImageCharacterIndex = location
-                textView.selectedImageWidthFraction = selectedWidth
             } else {
                 textView.selectedImageCharacterIndex = nil
-                textView.selectedImageWidthFraction = nil
             }
         }
 
@@ -1022,41 +1028,77 @@ struct RichTextEditor: NSViewRepresentable {
             }
         }
 
-        private func beginImageResize(at location: Int) {
+        func moveImage(from sourceLocation: Int, to proposedDestination: Int) {
             guard let textView,
                   let storage = textView.textStorage,
-                  location >= 0,
-                  location < storage.length,
-                  storage.attribute(.attachment, at: location, effectiveRange: nil) is NSTextAttachment
+                  sourceLocation >= 0,
+                  sourceLocation < storage.length,
+                  storage.attribute(.attachment, at: sourceLocation, effectiveRange: nil) is NSTextAttachment
             else { return }
 
-            textView.setSelectedRange(NSRange(location: location, length: 1))
-            // Register one undo snapshot for the entire drag gesture. Subsequent
-            // mouse-drag updates only adjust the attachment's presentation.
-            performMutation(actionName: "Resize Image") {}
+            let originalString = storage.string as NSString
+            let safeDestination = min(max(proposedDestination, 0), originalString.length)
+            let destinationParagraph = safeDestination == originalString.length
+                ? originalString.length
+                : originalString.paragraphRange(
+                    for: NSRange(location: safeDestination, length: 0)
+                ).location
+
+            var removalRange = NSRange(location: sourceLocation, length: 1)
+            if NSMaxRange(removalRange) < originalString.length,
+               originalString.character(at: NSMaxRange(removalRange)) == 0x0A {
+                removalRange.length += 1
+            }
+            guard !NSLocationInRange(destinationParagraph, removalRange) else { return }
+
+            let attachment = NSMutableAttributedString(
+                attributedString: storage.attributedSubstring(
+                    from: NSRange(location: sourceLocation, length: 1)
+                )
+            )
+            let leftAlignedStyle = NSMutableParagraphStyle()
+            leftAlignedStyle.alignment = .left
+            attachment.addAttribute(
+                .paragraphStyle,
+                value: leftAlignedStyle,
+                range: NSRange(location: 0, length: attachment.length)
+            )
+            attachment.append(
+                NSAttributedString(
+                    string: "\n",
+                    attributes: Self.defaultAttributes.merging([.paragraphStyle: leftAlignedStyle]) { _, new in new }
+                )
+            )
+
+            var finalInsertionLocation = 0
+            performMutation(actionName: "Move Image") {
+                storage.deleteCharacters(in: removalRange)
+                let adjustedDestination = destinationParagraph > removalRange.location
+                    ? destinationParagraph - removalRange.length
+                    : destinationParagraph
+                let insertionLocation = min(max(adjustedDestination, 0), storage.length)
+                finalInsertionLocation = insertionLocation
+                storage.insert(attachment, at: insertionLocation)
+            }
+            textView.setSelectedRange(NSRange(location: finalInsertionLocation, length: 1))
+            updateSelectionState()
         }
 
-        private func resizeImage(at location: Int, to fraction: Double) {
-            guard let textView,
-                  let storage = textView.textStorage,
-                  location >= 0,
-                  location < storage.length,
-                  let attachment = storage.attribute(.attachment, at: location, effectiveRange: nil) as? NSTextAttachment,
-                  let attachmentID = attachmentID(for: attachment),
-                  let imageSize = imageSize(for: attachment)
-            else { return }
+        private func paragraphAlignments(
+            in textView: NSTextView,
+            storage: NSTextStorage
+        ) -> [NSTextAlignment] {
+            guard storage.length > 0 else {
+                let style = textView.typingAttributes[.paragraphStyle] as? NSParagraphStyle
+                return [style?.alignment ?? .left]
+            }
 
-            let clamped = min(max(fraction, 0.10), 1)
-            imageDisplayWidths[attachmentID] = clamped
-            setBounds(for: attachment, imageSize: imageSize, widthFraction: clamped)
-            textView.layoutManager?.invalidateLayout(
-                forCharacterRange: NSRange(location: location, length: 1),
-                actualCharacterRange: nil
-            )
-            textView.selectedImageWidthFraction = clamped
-            textView.needsDisplay = true
-            emitChange()
-            updateSelectionState()
+            let range = paragraphRange(in: textView, storage: storage)
+            var alignments: [NSTextAlignment] = []
+            storage.enumerateAttribute(.paragraphStyle, in: range) { value, _, _ in
+                alignments.append((value as? NSParagraphStyle)?.alignment ?? .left)
+            }
+            return alignments.isEmpty ? [.left] : alignments
         }
 
         private func uniformValue(in values: [Bool]) -> Bool? {
@@ -1252,18 +1294,30 @@ final class WriterTextView: NSTextView {
             window?.invalidateCursorRects(for: self)
         }
     }
-    var selectedImageWidthFraction: Double? {
-        didSet { needsDisplay = true }
-    }
-
     var onSelectImage: ((Int) -> Void)?
     var onDeleteImage: ((Int) -> Void)?
-    var onBeginImageResize: ((Int) -> Void)?
-    var onResizeImage: ((Int, Double) -> Void)?
+    var onMoveImage: ((Int, Int) -> Void)?
     var onViewportWidthChange: (() -> Void)?
     var onFormattingCommand: ((EditorFormattingCommand) -> Void)?
 
-    private var activeResize: ActiveResize?
+    private var pendingImageDrag: PendingImageDrag?
+    private var imageDropCharacterIndex: Int? {
+        didSet { needsDisplay = true }
+    }
+    private var imageHoverTrackingArea: NSTrackingArea?
+    private var hoveredImageCharacterIndex: Int?
+    private var displayedDeleteImageCharacterIndex: Int?
+    private var deleteButtonOpacity: CGFloat = 0
+    private var deleteButtonFadeTimer: Timer?
+
+    deinit {
+        deleteButtonFadeTimer?.invalidate()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        window?.acceptsMouseMovedEvents = true
+    }
 
     override func setFrameSize(_ newSize: NSSize) {
         let oldWidth = frame.width
@@ -1275,6 +1329,36 @@ final class WriterTextView: NSTextView {
         DispatchQueue.main.async { [weak self] in
             self?.onViewportWidthChange?()
         }
+    }
+
+    override func updateTrackingAreas() {
+        if let imageHoverTrackingArea {
+            removeTrackingArea(imageHoverTrackingArea)
+        }
+
+        let trackingArea = NSTrackingArea(
+            rect: .zero,
+            options: [.activeInKeyWindow, .inVisibleRect, .mouseMoved, .mouseEnteredAndExited],
+            owner: self
+        )
+        addTrackingArea(trackingArea)
+        imageHoverTrackingArea = trackingArea
+        super.updateTrackingAreas()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        updateHoveredImage(at: convert(event.locationInWindow, from: nil))
+        super.mouseMoved(with: event)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        updateHoveredImage(at: convert(event.locationInWindow, from: nil))
+        super.mouseEntered(with: event)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        updateHoveredImage(at: nil)
+        super.mouseExited(with: event)
     }
 
     override func paste(_ sender: Any?) {
@@ -1339,40 +1423,39 @@ final class WriterTextView: NSTextView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        guard let location = selectedImageCharacterIndex,
-              let imageRect = attachmentRect(at: location)
-        else { return }
-
         NSGraphicsContext.saveGraphicsState()
 
-        NSColor.controlAccentColor.setStroke()
-        let outline = NSBezierPath(roundedRect: imageRect.insetBy(dx: -2, dy: -2), xRadius: 3, yRadius: 3)
-        outline.lineWidth = 2
-        outline.stroke()
-
-        for handle in ResizeHandle.allCases {
-            let rect = handleRect(for: handle, imageRect: imageRect)
-            NSColor.white.setFill()
-            NSColor.controlAccentColor.setStroke()
-            let path = NSBezierPath(roundedRect: rect, xRadius: 2, yRadius: 2)
-            path.lineWidth = 1.5
-            path.fill()
-            path.stroke()
+        if let location = displayedDeleteImageCharacterIndex,
+           deleteButtonOpacity > 0,
+           let imageRect = attachmentRect(at: location) {
+            let closeRect = closeButtonRect(for: imageRect)
+            NSColor.systemRed.withAlphaComponent(deleteButtonOpacity).setFill()
+            NSBezierPath(ovalIn: closeRect).fill()
+            NSColor.white.withAlphaComponent(deleteButtonOpacity).setStroke()
+            let inset = closeRect.insetBy(dx: 6.5, dy: 6.5)
+            let closePath = NSBezierPath()
+            closePath.lineWidth = 2
+            closePath.lineCapStyle = .round
+            closePath.move(to: NSPoint(x: inset.minX, y: inset.minY))
+            closePath.line(to: NSPoint(x: inset.maxX, y: inset.maxY))
+            closePath.move(to: NSPoint(x: inset.maxX, y: inset.minY))
+            closePath.line(to: NSPoint(x: inset.minX, y: inset.maxY))
+            closePath.stroke()
         }
 
-        let closeRect = closeButtonRect(for: imageRect)
-        NSColor.systemRed.setFill()
-        NSBezierPath(ovalIn: closeRect).fill()
-        NSColor.white.setStroke()
-        let inset = closeRect.insetBy(dx: 6.5, dy: 6.5)
-        let closePath = NSBezierPath()
-        closePath.lineWidth = 2
-        closePath.lineCapStyle = .round
-        closePath.move(to: NSPoint(x: inset.minX, y: inset.minY))
-        closePath.line(to: NSPoint(x: inset.maxX, y: inset.maxY))
-        closePath.move(to: NSPoint(x: inset.maxX, y: inset.minY))
-        closePath.line(to: NSPoint(x: inset.minX, y: inset.maxY))
-        closePath.stroke()
+        if imageDropCharacterIndex != nil {
+            NSColor.controlAccentColor.setFill()
+            NSBezierPath(
+                roundedRect: NSRect(
+                    x: textContainerOrigin.x,
+                    y: insertionIndicatorY,
+                    width: max(textContainerWidth, 32),
+                    height: 3
+                ),
+                xRadius: 1.5,
+                yRadius: 1.5
+            ).fill()
+        }
 
         NSGraphicsContext.restoreGraphicsState()
     }
@@ -1380,29 +1463,23 @@ final class WriterTextView: NSTextView {
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
 
-        if let location = selectedImageCharacterIndex,
+        if let location = hoveredImageCharacterIndex,
            let imageRect = attachmentRect(at: location) {
             if closeButtonHitRect(for: imageRect).contains(point) {
+                updateHoveredImage(at: nil)
                 onDeleteImage?(location)
-                return
-            }
-
-            if let handle = resizeHandle(at: point, imageRect: imageRect),
-               let initialFraction = selectedImageWidthFraction {
-                activeResize = ActiveResize(
-                    location: location,
-                    handle: handle,
-                    initialPoint: point,
-                    initialImageRect: imageRect,
-                    initialWidthFraction: initialFraction
-                )
-                onBeginImageResize?(location)
                 return
             }
         }
 
         if let location = attachmentLocation(at: point) {
             onSelectImage?(location)
+            pendingImageDrag = PendingImageDrag(
+                sourceLocation: location,
+                initialPoint: point,
+                destinationLocation: location,
+                isDragging: false
+            )
             return
         }
 
@@ -1410,29 +1487,33 @@ final class WriterTextView: NSTextView {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard let activeResize else {
+        guard var drag = pendingImageDrag else {
             super.mouseDragged(with: event)
             return
         }
 
         let point = convert(event.locationInWindow, from: nil)
-        let deltaX = point.x - activeResize.initialPoint.x
-        let deltaY = point.y - activeResize.initialPoint.y
-        let aspect = activeResize.initialImageRect.width / max(activeResize.initialImageRect.height, 1)
-        let widthDelta = activeResize.handle.widthDelta(
-            horizontal: deltaX,
-            vertical: deltaY,
-            aspect: aspect
-        )
-        let proposedWidth = max(activeResize.initialImageRect.width + widthDelta, 1)
-        let proposedFraction = activeResize.initialWidthFraction
-            * Double(proposedWidth / max(activeResize.initialImageRect.width, 1))
-        onResizeImage?(activeResize.location, min(max(proposedFraction, 0.10), 1))
+        if !drag.isDragging {
+            let distance = hypot(point.x - drag.initialPoint.x, point.y - drag.initialPoint.y)
+            guard distance >= 4 else { return }
+            drag.isDragging = true
+        }
+
+        autoscroll(with: event)
+        drag.destinationLocation = characterIndexForInsertion(at: point)
+        pendingImageDrag = drag
+        imageDropCharacterIndex = drag.destinationLocation
+        NSCursor.closedHand.set()
     }
 
     override func mouseUp(with event: NSEvent) {
-        if activeResize != nil {
-            activeResize = nil
+        if let drag = pendingImageDrag {
+            pendingImageDrag = nil
+            imageDropCharacterIndex = nil
+            NSCursor.arrow.set()
+            if drag.isDragging {
+                onMoveImage?(drag.sourceLocation, drag.destinationLocation)
+            }
             return
         }
         super.mouseUp(with: event)
@@ -1440,15 +1521,72 @@ final class WriterTextView: NSTextView {
 
     override func resetCursorRects() {
         super.resetCursorRects()
-        guard let location = selectedImageCharacterIndex,
-              let imageRect = attachmentRect(at: location)
-        else { return }
-
-        addCursorRect(closeButtonHitRect(for: imageRect), cursor: .pointingHand)
-        for handle in ResizeHandle.allCases {
-            let cursor: NSCursor = handle.isHorizontalEdge ? .resizeLeftRight : .resizeUpDown
-            addCursorRect(handleHitRect(for: handle, imageRect: imageRect), cursor: cursor)
+        guard let storage = textStorage else { return }
+        storage.enumerateAttribute(
+            .attachment,
+            in: NSRange(location: 0, length: storage.length),
+            options: [.longestEffectiveRangeNotRequired]
+        ) { value, range, _ in
+            guard value is NSTextAttachment,
+                  let imageRect = attachmentRect(at: range.location)
+            else { return }
+            addCursorRect(imageRect, cursor: .openHand)
+            addCursorRect(closeButtonHitRect(for: imageRect), cursor: .pointingHand)
         }
+    }
+
+    private func updateHoveredImage(at point: NSPoint?) {
+        let location = point.flatMap(attachmentLocation(at:))
+        guard hoveredImageCharacterIndex != location else { return }
+
+        hoveredImageCharacterIndex = location
+        if let location {
+            displayedDeleteImageCharacterIndex = location
+            animateDeleteButton(to: 1)
+        } else {
+            animateDeleteButton(to: 0)
+        }
+        window?.invalidateCursorRects(for: self)
+    }
+
+    private func animateDeleteButton(to targetOpacity: CGFloat) {
+        deleteButtonFadeTimer?.invalidate()
+
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            deleteButtonOpacity = targetOpacity
+            if targetOpacity == 0 {
+                displayedDeleteImageCharacterIndex = nil
+            }
+            needsDisplay = true
+            return
+        }
+
+        let initialOpacity = deleteButtonOpacity
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        let duration = 0.16
+        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] timer in
+            guard let self else {
+                timer.invalidate()
+                return
+            }
+
+            let elapsed = ProcessInfo.processInfo.systemUptime - startedAt
+            let progress = min(max(elapsed / duration, 0), 1)
+            let easedProgress = 1 - pow(1 - progress, 3)
+            self.deleteButtonOpacity = initialOpacity
+                + ((targetOpacity - initialOpacity) * CGFloat(easedProgress))
+            self.needsDisplay = true
+
+            if progress >= 1 {
+                timer.invalidate()
+                self.deleteButtonFadeTimer = nil
+                if targetOpacity == 0 {
+                    self.displayedDeleteImageCharacterIndex = nil
+                }
+            }
+        }
+        deleteButtonFadeTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     private func attachmentLocation(at point: NSPoint) -> Int? {
@@ -1489,81 +1627,40 @@ final class WriterTextView: NSTextView {
     }
 
     private func closeButtonRect(for imageRect: NSRect) -> NSRect {
-        NSRect(x: imageRect.maxX - 30, y: imageRect.minY + 8, width: 24, height: 24)
+        // AppKit displays its attachment-options affordance in the upper-right
+        // corner on hover. Mirror the destructive action on the opposite side
+        // so both controls remain visible and easy to distinguish.
+        NSRect(x: imageRect.minX + 6, y: imageRect.minY + 8, width: 24, height: 24)
     }
 
     private func closeButtonHitRect(for imageRect: NSRect) -> NSRect {
         closeButtonRect(for: imageRect).insetBy(dx: -4, dy: -4)
     }
 
-    private func handleRect(for handle: ResizeHandle, imageRect: NSRect) -> NSRect {
-        let point = handle.point(in: imageRect)
-        return NSRect(x: point.x - 4, y: point.y - 4, width: 8, height: 8)
+    private var insertionIndicatorY: CGFloat {
+        guard let characterIndex = imageDropCharacterIndex,
+              let layoutManager,
+              let storage = textStorage,
+              storage.length > 0
+        else { return textContainerOrigin.y }
+
+        let isAtDocumentEnd = characterIndex >= storage.length
+        let safeCharacterIndex = min(characterIndex, storage.length - 1)
+        let glyphIndex = layoutManager.glyphIndexForCharacter(at: safeCharacterIndex)
+        let lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+        return textContainerOrigin.y + (isAtDocumentEnd ? lineRect.maxY : lineRect.minY) - 2
     }
 
-    private func handleHitRect(for handle: ResizeHandle, imageRect: NSRect) -> NSRect {
-        handleRect(for: handle, imageRect: imageRect).insetBy(dx: -6, dy: -6)
+    private var textContainerWidth: CGFloat {
+        guard let textContainer else { return 32 }
+        return textContainer.size.width - (textContainer.lineFragmentPadding * 2)
     }
 
-    private func resizeHandle(at point: NSPoint, imageRect: NSRect) -> ResizeHandle? {
-        ResizeHandle.allCases.first {
-            handleHitRect(for: $0, imageRect: imageRect).contains(point)
-        }
-    }
-
-    private struct ActiveResize {
-        let location: Int
-        let handle: ResizeHandle
+    private struct PendingImageDrag {
+        let sourceLocation: Int
         let initialPoint: NSPoint
-        let initialImageRect: NSRect
-        let initialWidthFraction: Double
-    }
-
-    private enum ResizeHandle: CaseIterable {
-        case topLeft, top, topRight, left, right, bottomLeft, bottom, bottomRight
-
-        var isHorizontalEdge: Bool {
-            self == .left || self == .right
-        }
-
-        func point(in rect: NSRect) -> NSPoint {
-            switch self {
-            case .topLeft: return NSPoint(x: rect.minX, y: rect.minY)
-            case .top: return NSPoint(x: rect.midX, y: rect.minY)
-            case .topRight: return NSPoint(x: rect.maxX, y: rect.minY)
-            case .left: return NSPoint(x: rect.minX, y: rect.midY)
-            case .right: return NSPoint(x: rect.maxX, y: rect.midY)
-            case .bottomLeft: return NSPoint(x: rect.minX, y: rect.maxY)
-            case .bottom: return NSPoint(x: rect.midX, y: rect.maxY)
-            case .bottomRight: return NSPoint(x: rect.maxX, y: rect.maxY)
-            }
-        }
-
-        func widthDelta(horizontal: CGFloat, vertical: CGFloat, aspect: CGFloat) -> CGFloat {
-            let horizontalDelta: CGFloat?
-            let verticalDelta: CGFloat?
-            switch self {
-            case .topLeft, .left, .bottomLeft: horizontalDelta = -horizontal
-            case .topRight, .right, .bottomRight: horizontalDelta = horizontal
-            case .top, .bottom: horizontalDelta = nil
-            }
-            switch self {
-            case .topLeft, .top, .topRight: verticalDelta = -vertical * aspect
-            case .bottomLeft, .bottom, .bottomRight: verticalDelta = vertical * aspect
-            case .left, .right: verticalDelta = nil
-            }
-
-            switch (horizontalDelta, verticalDelta) {
-            case let (horizontal?, vertical?):
-                return abs(horizontal) >= abs(vertical) ? horizontal : vertical
-            case let (horizontal?, nil):
-                return horizontal
-            case let (nil, vertical?):
-                return vertical
-            default:
-                return 0
-            }
-        }
+        var destinationLocation: Int
+        var isDragging: Bool
     }
 }
 

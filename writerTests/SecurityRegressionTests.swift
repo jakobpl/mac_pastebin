@@ -160,6 +160,115 @@ final class SecurityRegressionTests: XCTestCase {
         XCTAssertFalse(coordinator.consumeResetGeneration(8))
     }
 
+    func testSecureFieldDoesNotPublishDuringRepresentableUpdates() {
+        var text = "secret"
+        var publicationCount = 0
+        let field = WriterSecurePasswordField(
+            text: Binding(
+                get: { text },
+                set: {
+                    text = $0
+                    publicationCount += 1
+                }
+            ),
+            placeholder: "Password",
+            accessibilityLabel: "Password",
+            requestsInitialFocus: false,
+            resetGeneration: 0,
+            onSubmit: {}
+        )
+        let coordinator = field.makeCoordinator()
+        let secureField = NSSecureTextField()
+        secureField.stringValue = ""
+
+        coordinator.performRepresentableUpdate {
+            coordinator.controlTextDidChange(
+                Notification(name: NSControl.textDidChangeNotification, object: secureField)
+            )
+        }
+
+        XCTAssertEqual(text, "secret")
+        XCTAssertEqual(publicationCount, 0)
+
+        coordinator.controlTextDidChange(
+            Notification(name: NSControl.textDidChangeNotification, object: secureField)
+        )
+        XCTAssertEqual(text, "")
+        XCTAssertEqual(publicationCount, 1)
+    }
+
+    func testEntireSecureFieldAcceptsAppReactivationClick() {
+        let container = SecurePasswordContainer()
+
+        XCTAssertTrue(container.acceptsFirstMouse(for: nil))
+        XCTAssertTrue(container.textField.acceptsFirstMouse(for: nil))
+    }
+
+    func testSecureFieldDisablesPlaintextSuggestionSurfaces() {
+        let field = ReactivatingSecureTextField()
+        let editor = NSTextView()
+        ReactivatingSecureTextField.disableTextAssistance(in: editor)
+
+        XCTAssertTrue(field.cell is NSSecureTextFieldCell)
+        XCTAssertFalse(field.isAutomaticTextCompletionEnabled)
+        XCTAssertFalse(field.allowsCharacterPickerTouchBarItem)
+        XCTAssertFalse(field.allowsWritingTools)
+        XCTAssertFalse(field.allowsWritingToolsAffordance)
+        XCTAssertFalse(editor.isAutomaticTextCompletionEnabled)
+        XCTAssertFalse(editor.isAutomaticSpellingCorrectionEnabled)
+        XCTAssertFalse(editor.isAutomaticTextReplacementEnabled)
+        XCTAssertFalse(editor.isContinuousSpellCheckingEnabled)
+        XCTAssertFalse(editor.isGrammarCheckingEnabled)
+        XCTAssertEqual(editor.enabledTextCheckingTypes, 0)
+        XCTAssertEqual(editor.writingToolsBehavior, .none)
+    }
+
+    func testLockBoundaryEndsTheActiveTextInputSession() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        let textView = WriterTextView(frame: window.contentView?.bounds ?? .zero)
+        window.contentView = textView
+        XCTAssertTrue(window.makeFirstResponder(textView))
+
+        AppState.endActiveTextInputSessions(in: [window])
+
+        XCTAssertFalse(window.firstResponder === textView)
+    }
+
+    func testSecureFieldFocusReplacesAStaleRichTextResponder() throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        let rootView = NSView(frame: window.contentView?.bounds ?? .zero)
+        let staleEditor = WriterTextView(frame: rootView.bounds)
+        let passwordContainer = SecurePasswordContainer(frame: rootView.bounds)
+        rootView.addSubview(staleEditor)
+        rootView.addSubview(passwordContainer)
+        window.contentView = rootView
+        XCTAssertTrue(window.makeFirstResponder(staleEditor))
+
+        XCTAssertTrue(passwordContainer.focusPasswordField(in: window))
+        XCTAssertTrue(
+            window.firstResponder === passwordContainer.textField
+                || window.firstResponder === passwordContainer.textField.currentEditor()
+        )
+
+        let fieldEditor = try XCTUnwrap(passwordContainer.textField.currentEditor() as? NSTextView)
+        XCTAssertFalse(fieldEditor.isAutomaticTextCompletionEnabled)
+        XCTAssertFalse(fieldEditor.isAutomaticSpellingCorrectionEnabled)
+        XCTAssertFalse(fieldEditor.isAutomaticTextReplacementEnabled)
+        XCTAssertFalse(fieldEditor.isContinuousSpellCheckingEnabled)
+        XCTAssertEqual(fieldEditor.enabledTextCheckingTypes, 0)
+        XCTAssertEqual(fieldEditor.writingToolsBehavior, .none)
+    }
+
     private func makeService() -> VaultService {
         VaultService(
             applicationSupportDirectory: makeTemporaryDirectory(),
