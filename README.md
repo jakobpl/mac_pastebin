@@ -29,7 +29,7 @@ Put your Apple Team ID in `Config/Local.xcconfig`, then open `writer.xcodeproj` 
 
 ## Download
 
-Prebuilt releases are attached on the [GitHub Releases](https://github.com/jakobpl/writer/releases) page (`Writer-macOS.zip`).
+Prebuilt releases are attached on the [GitHub Releases](https://github.com/jakobpl/mac_pastebin/releases) page (`Writer-macOS.zip`).
 
 After unzipping, macOS may block the first launch (unsigned / not notarized). Newer macOS often shows only **Move to Trash** / **Done** — that is normal.
 
